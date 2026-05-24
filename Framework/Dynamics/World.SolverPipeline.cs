@@ -276,6 +276,18 @@ namespace Box2DNG
                         body.SetTransform(newPosition, newRot);
 
                         body.Sweep = new Sweep(body.LocalCenter, oldCenter, newCenter, oldAngle, newAngle, 0f);
+
+                        // Phase 2.5 of TIER4_PARITY_PLAN — Stage A: dual-track
+                        // within-step movement into the SoA delta arrays.
+                        // body.Transform still advances above (no consumer
+                        // reads delta yet); this is just bookkeeping so the
+                        // suite stays green while the migration unfolds.
+                        // Stage B+ removes the body.SetTransform call above
+                        // and migrates joint/contact solvers to read
+                        // body.Position + delta.
+                        int bodyId = body.Id;
+                        _world._bodyDeltaPositions[bodyId] = _world._bodyDeltaPositions[bodyId] + translation;
+                        _world._bodyDeltaRotations[bodyId] = Rot.Mul(_world._bodyDeltaRotations[bodyId], new Rot(rotation));
                     }
                 }
             }

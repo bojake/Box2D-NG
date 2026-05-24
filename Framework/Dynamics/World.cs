@@ -94,6 +94,20 @@ namespace Box2DNG
         internal Vec2[] _bodyPositions;
         internal Vec2[] _bodyLocalCenters;
         internal Rot[] _bodyRotations;
+        // Phase 2.5 of TIER4_PARITY_PLAN: per-body within-step movement,
+        // matching cpp box2d v3's `b2BodyState.deltaPosition` /
+        // `deltaRotation`. Reset to (0, identity) at the start of every
+        // outer Step. Each IntegratePositions sub-step adds its
+        // translation/rotation into these arrays. Joint + contact solvers
+        // read `body.Position + _bodyDeltaPositions[id]` (and the composed
+        // rotation) so iterations see the predicted post-integration
+        // anchor offset without bodies' transforms actually advancing.
+        // Stage A (this commit): arrays accumulate but no consumer reads
+        // them yet — body.Transform still advances inside IntegratePositions
+        // as before. Stage B+ switches consumers over and stops advancing
+        // body.Transform until the end of the outer step.
+        internal Vec2[] _bodyDeltaPositions;
+        internal Rot[] _bodyDeltaRotations;
         internal Vec2[] _bodyLinearVelocities;
         internal float[] _bodyAngularVelocities;
         internal float[] _bodyLinearDampings;
@@ -126,6 +140,16 @@ namespace Box2DNG
             Array.Resize(ref _bodyPositions, newCapacity);
             Array.Resize(ref _bodyLocalCenters, newCapacity);
             Array.Resize(ref _bodyRotations, newCapacity);
+            int oldCapacityForDeltas = _bodyDeltaRotations?.Length ?? 0;
+            Array.Resize(ref _bodyDeltaPositions, newCapacity);
+            Array.Resize(ref _bodyDeltaRotations, newCapacity);
+            // New Rot slots default to (S=0, C=0) which is NOT identity;
+            // fill them so a body inserted at a fresh slot has a sane
+            // (0, identity) delta.
+            if (newCapacity > oldCapacityForDeltas)
+            {
+                Array.Fill(_bodyDeltaRotations, Rot.Identity, oldCapacityForDeltas, newCapacity - oldCapacityForDeltas);
+            }
             Array.Resize(ref _bodyLinearVelocities, newCapacity);
             Array.Resize(ref _bodyAngularVelocities, newCapacity);
             Array.Resize(ref _bodyLinearDampings, newCapacity);
@@ -166,6 +190,9 @@ namespace Box2DNG
             _bodyCapacity = 1024;
             _bodyPositions = new Vec2[_bodyCapacity];
             _bodyRotations = new Rot[_bodyCapacity];
+            _bodyDeltaPositions = new Vec2[_bodyCapacity];
+            _bodyDeltaRotations = new Rot[_bodyCapacity];
+            Array.Fill(_bodyDeltaRotations, Rot.Identity);
             _bodyLocalCenters = new Vec2[_bodyCapacity]; // Added
             _bodyLinearVelocities = new Vec2[_bodyCapacity];
             _bodyAngularVelocities = new float[_bodyCapacity];
@@ -510,7 +537,12 @@ namespace Box2DNG
 
             Body body = new Body(this, def, id);
             _bodyPoolIds[id] = poolId;
-            
+            // Phase 2.5: initialize within-step delta to (0, identity) so a
+            // body inserted mid-frame (or into a slot vacated by a swap-
+            // remove) sees a fresh, post-step-start state.
+            _bodyDeltaPositions[id] = Vec2.Zero;
+            _bodyDeltaRotations[id] = Rot.Identity;
+
             _bodies.Add(body);
             _bodyCount++;
 
@@ -596,6 +628,8 @@ namespace Box2DNG
                 _bodyPositions[idToRemove] = _bodyPositions[lastId];
                 _bodyLocalCenters[idToRemove] = _bodyLocalCenters[lastId];
                 _bodyRotations[idToRemove] = _bodyRotations[lastId];
+                _bodyDeltaPositions[idToRemove] = _bodyDeltaPositions[lastId];
+                _bodyDeltaRotations[idToRemove] = _bodyDeltaRotations[lastId];
                 _bodyLinearVelocities[idToRemove] = _bodyLinearVelocities[lastId];
                 _bodyAngularVelocities[idToRemove] = _bodyAngularVelocities[lastId];
                 _bodyLinearDampings[idToRemove] = _bodyLinearDampings[lastId];
@@ -5161,6 +5195,13 @@ namespace Box2DNG
                 float angle = body.Transform.Q.Angle;
                 body.Sweep = new Sweep(body.LocalCenter, center, center, angle, angle, 0f);
                 _bodyAwakeAtStepStart[body.Id] = _bodyAwakes[body.Id];
+                // Phase 2.5 of TIER4_PARITY_PLAN: clear within-step delta at
+                // start of each outer Step. Sub-steps inside the Step loop
+                // accumulate into these arrays. Consumers (added in
+                // subsequent stages) read `body.Position + delta` so they
+                // see the predicted post-integration anchor offset.
+                _bodyDeltaPositions[body.Id] = Vec2.Zero;
+                _bodyDeltaRotations[body.Id] = Rot.Identity;
             }
         }
 
