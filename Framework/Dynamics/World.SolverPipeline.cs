@@ -262,7 +262,6 @@ namespace Box2DNG
                     _world.UpdateSleep(timeStep);
                 }
                 _world.SolveTOI();
-                _world.ReconcileGraphAfterTOI();
                 _world.UpdateSensors();
                 _world.RaiseBodyEvents();
                 _world.RaiseJointEvents(timeStep > 0f ? 1f / timeStep : 0f);

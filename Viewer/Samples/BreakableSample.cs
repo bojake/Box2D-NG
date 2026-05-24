@@ -4,7 +4,12 @@ namespace Box2DNG.Viewer.Samples
 {
     public sealed class BreakableSample : BaseSample
     {
-        private const float BreakImpulse = 40f;
+        // Per-event ContactImpulseEvent.NormalImpulse for the 2-square body
+        // dropped from y=40 onto the ground peaks around 2.4 N·s with the GJK
+        // direction fix and Solve3 simplex-collapse fix in place. The pre-fix
+        // value (~15-20) was inflated by stale impulses and wrong GJK distances,
+        // so the original 40 threshold from upstream box2d never triggered here.
+        private const float BreakImpulse = 2f;
         private Body? _body;
         private Fixture? _piece1;
         private Fixture? _piece2;

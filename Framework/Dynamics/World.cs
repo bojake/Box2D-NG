@@ -5822,54 +5822,6 @@ namespace Box2DNG
             body.SetTransformFromSweep(sweep);
         }
 
-        // SolveTOI's contact.Update calls mutate contact state (IsTouching, Manifold)
-        // after BuildConstraintGraph has already run. Any contact that transitions
-        // through TOI ends up with stale graph metadata (ColorIndex = -1, not linked).
-        // Reconcile by linking/colouring touching contacts that fell through and
-        // unlinking any that stopped touching.
-        private void ReconcileGraphAfterTOI()
-        {
-            foreach (var kv in _contactMap)
-            {
-                Contact c = kv.Value;
-                if (c.FixtureA == null || c.FixtureB == null)
-                {
-                    continue;
-                }
-                if (c.FixtureA.IsSensor || c.FixtureB.IsSensor)
-                {
-                    continue;
-                }
-
-                bool isLinked = c.EdgeIdA >= 0 && c.EdgeIdB >= 0;
-                if (c.IsTouching)
-                {
-                    if (!isLinked)
-                    {
-                        LinkContact(c);
-                    }
-                    if (c.SolverSetType == SolverSetType.Awake && c.ColorIndex < 0 &&
-                        c.FixtureA.Body.Type != BodyType.Static && c.FixtureB.Body.Type != BodyType.Static)
-                    {
-                        if (!_awakeSet.Contacts.Contains(c))
-                        {
-                            _awakeSet.Contacts.Add(c);
-                        }
-                        if (c.Manifold.PointCount > 0)
-                        {
-                            AddContactToConstraintGraph(c);
-                        }
-                    }
-                }
-                else if (isLinked)
-                {
-                    UnlinkContact(c);
-                    c.ColorIndex = -1;
-                    c.LocalIndex = -1;
-                }
-            }
-        }
-
         private void ProcessTOI(Contact contact, float timeStep, int subSteps)
         {
             Body? bodyA = contact.FixtureA?.Body;
