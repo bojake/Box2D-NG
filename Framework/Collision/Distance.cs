@@ -390,10 +390,12 @@ namespace Box2DNG
                     break;
                 }
 
-                Vec2 dir = -d;
-                int indexA = proxyA.GetSupport(Rot.MulT(transformA.Q, dir));
+                // The simplex stores W = wB - wA. To pull wB - wA toward origin
+                // we need new wA in +d and new wB in -d. (box2d-cpp uses the
+                // opposite convention w = wA - wB and so flips both signs.)
+                int indexA = proxyA.GetSupport(Rot.MulT(transformA.Q, d));
                 Vec2 wA = Transform.Mul(transformA, proxyA.GetVertex(indexA));
-                int indexB = proxyB.GetSupport(Rot.MulT(transformB.Q, -dir));
+                int indexB = proxyB.GetSupport(Rot.MulT(transformB.Q, -d));
                 Vec2 wB = Transform.Mul(transformB, proxyB.GetVertex(indexB));
 
                 SimplexVertex v = new SimplexVertex

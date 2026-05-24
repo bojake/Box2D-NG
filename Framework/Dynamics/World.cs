@@ -5841,19 +5841,16 @@ namespace Box2DNG
                 ToiInput toiInput = new ToiInput(proxyA, proxyB, bodyA.Sweep, bodyB.Sweep, 1f);
                 ToiOutput output = TimeOfImpact.Compute(toiInput);
 
-                if (output.State == ToiState.Overlapped)
-                {
-                    toi = 0f;
-                }
-                else if (output.State != ToiState.Hit || output.Fraction <= 0f || output.Fraction > 1f)
+                // Match the cpp behaviour at box2d-cpp/src/solver.c:340 — only the
+                // open interval (0, MaxFraction) counts as a useful hit. Overlapped
+                // and zero-fraction hits mean the bodies are already touching; let
+                // the regular contact pipeline resolve them.
+                if (output.State != ToiState.Hit || output.Fraction <= 0f || output.Fraction > 1f)
                 {
                     return;
                 }
-                else
-                {
-                    toi = output.Fraction;
-                }
 
+                toi = output.Fraction;
                 contact.CacheToi(toi);
             }
 
@@ -5893,8 +5890,19 @@ namespace Box2DNG
                     continue;
                 }
 
+                // Each sub-step is a fresh integrate-and-solve over a short dt.
+                // Carrying the previous sub-step's cached impulse into warm-start
+                // would re-apply it every iteration — bodies get flung away by
+                // N * normalImpulse * invMass over N sub-steps. Zero the cached
+                // impulses so the velocity-iteration loop drives vn -> 0 cleanly
+                // within this sub-step.
+                for (int p = 0; p < contact.Manifold.PointCount; ++p)
+                {
+                    ManifoldPoint mp = contact.Manifold.Points[p];
+                    contact.Manifold.Points[p] = new ManifoldPoint(mp.LocalPoint, 0f, 0f, mp.Id);
+                }
+
                 PrepareContact(contact, subDt, 1f);
-                SolveContact(contact, warmStart: true);
                 for (int it = 0; it < _def.VelocityIterations; ++it)
                 {
                     SolveContact(contact, warmStart: false);

@@ -21,12 +21,19 @@ namespace Box2DNG.Tests
             Fixture? piece2 = body.CreateFixture(new FixtureDef(shape2).WithDensity(1f).WithUserData("piece2"));
 
             bool breakFlag = false;
+            // The 40m drop produces a peak vy of ~28 m/s and a 2 kg body. The
+            // resulting normal impulse is split across two contact points per
+            // square × two squares — each per-event impulse is around 15-20.
+            // The original threshold of 40 implicitly relied on the buggy GJK
+            // inflating a single point's impulse; with that fixed the spread is
+            // accurate, so we threshold on the realistic per-point magnitude.
+            const float kBreakThreshold = 10f;
             world.Events.ContactImpulseEvents += events =>
             {
                 for (int i = 0; i < events.Events.Length; ++i)
                 {
                     ContactImpulseEvent impulse = events.Events[i];
-                    if (impulse.NormalImpulse > 40f &&
+                    if (impulse.NormalImpulse > kBreakThreshold &&
                         (Equals(impulse.UserDataA, "piece1") || Equals(impulse.UserDataB, "piece1") ||
                          Equals(impulse.UserDataA, "piece2") || Equals(impulse.UserDataB, "piece2")))
                     {
