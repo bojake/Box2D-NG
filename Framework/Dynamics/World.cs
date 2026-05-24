@@ -106,6 +106,7 @@ namespace Box2DNG
         internal float[] _bodyInverseInertias;
         internal bool[] _bodyFixedRotations;
         internal bool[] _bodyAwakes;
+        internal bool[] _bodyAwakeAtStepStart;
         internal bool[] _bodyAllowSleeps;
         internal Vec2[] _bodyForces;
         internal float[] _bodyTorques;
@@ -137,6 +138,7 @@ namespace Box2DNG
             Array.Resize(ref _bodyInverseInertias, newCapacity);
             Array.Resize(ref _bodyFixedRotations, newCapacity);
             Array.Resize(ref _bodyAwakes, newCapacity);
+            Array.Resize(ref _bodyAwakeAtStepStart, newCapacity);
             Array.Resize(ref _bodyAllowSleeps, newCapacity);
             Array.Resize(ref _bodyForces, newCapacity);
             Array.Resize(ref _bodyTorques, newCapacity);
@@ -175,6 +177,7 @@ namespace Box2DNG
             _bodyInverseInertias = new float[_bodyCapacity];
             _bodyFixedRotations = new bool[_bodyCapacity];
             _bodyAwakes = new bool[_bodyCapacity];
+            _bodyAwakeAtStepStart = new bool[_bodyCapacity];
             _bodyAllowSleeps = new bool[_bodyCapacity];
             _bodyForces = new Vec2[_bodyCapacity];
             _bodyTorques = new float[_bodyCapacity];
@@ -3878,6 +3881,7 @@ namespace Box2DNG
                 IsSensor = def.IsSensor,
                 EnableSensorEvents = def.EnableSensorEvents,
                 Filter = def.Filter,
+                Material = def.ToMaterial(),
                 UserData = def.UserData
             };
             fixture.Aabb = ShapeGeometry.ComputeAabb(def.Shape, body.Transform);
@@ -5105,6 +5109,122 @@ namespace Box2DNG
                 Vec2 center = body.GetWorldCenter();
                 float angle = body.Transform.Q.Angle;
                 body.Sweep = new Sweep(body.LocalCenter, center, center, angle, angle, 0f);
+                _bodyAwakeAtStepStart[body.Id] = _bodyAwakes[body.Id];
+            }
+        }
+
+        internal void RaiseBodyEvents()
+        {
+            if (_bodies.Count == 0)
+            {
+                return;
+            }
+
+            System.Collections.Generic.List<BodyEvent> moves = new System.Collections.Generic.List<BodyEvent>();
+            for (int i = 0; i < _bodies.Count; ++i)
+            {
+                Body body = _bodies[i];
+                if (body.Type == BodyType.Static)
+                {
+                    continue;
+                }
+
+                bool wasAwake = _bodyAwakeAtStepStart[body.Id];
+                bool isAwake = _bodyAwakes[body.Id];
+                bool fellAsleep = wasAwake && !isAwake;
+                if (!isAwake && !fellAsleep)
+                {
+                    continue;
+                }
+
+                moves.Add(new BodyEvent(body.Definition.UserData, body.Transform, fellAsleep));
+            }
+
+            if (moves.Count > 0)
+            {
+                _events.Raise(new BodyEvents(moves.ToArray()));
+            }
+        }
+
+        internal void RaiseJointEvents(float invDt)
+        {
+            float forceThreshold = _def.JointForceThreshold;
+            float torqueThreshold = _def.JointTorqueThreshold;
+            if (forceThreshold >= float.MaxValue && torqueThreshold >= float.MaxValue)
+            {
+                return;
+            }
+
+            System.Collections.Generic.List<JointEvent> events = new System.Collections.Generic.List<JointEvent>();
+
+            void Consider(Body bodyA, Body bodyB, Vec2 reactionForce, float reactionTorque)
+            {
+                if (bodyA == null || bodyB == null)
+                {
+                    return;
+                }
+                if (!_bodyAwakes[bodyA.Id] && !_bodyAwakes[bodyB.Id])
+                {
+                    return;
+                }
+                float force = reactionForce.Length;
+                float torque = MathF.Abs(reactionTorque);
+                if (force >= forceThreshold || torque >= torqueThreshold)
+                {
+                    events.Add(new JointEvent(bodyA.Definition.UserData, bodyB.Definition.UserData, force, torque));
+                }
+            }
+
+            for (int i = 0; i < _distanceJointCount; ++i)
+            {
+                DistanceJoint j = _distanceJoints[i];
+                Consider(j.BodyA, j.BodyB, j.GetReactionForce(invDt), j.GetReactionTorque(invDt));
+            }
+            for (int i = 0; i < _revoluteJointCount; ++i)
+            {
+                RevoluteJoint j = _revoluteJoints[i];
+                Consider(j.BodyA, j.BodyB, j.GetReactionForce(invDt), j.GetReactionTorque(invDt));
+            }
+            for (int i = 0; i < _prismaticJointCount; ++i)
+            {
+                PrismaticJoint j = _prismaticJoints[i];
+                Consider(j.BodyA, j.BodyB, j.GetReactionForce(invDt), j.GetReactionTorque(invDt));
+            }
+            for (int i = 0; i < _wheelJointCount; ++i)
+            {
+                WheelJoint j = _wheelJoints[i];
+                Consider(j.BodyA, j.BodyB, j.GetReactionForce(invDt), j.GetReactionTorque(invDt));
+            }
+            for (int i = 0; i < _pulleyJointCount; ++i)
+            {
+                PulleyJoint j = _pulleyJoints[i];
+                Consider(j.BodyA, j.BodyB, j.GetReactionForce(invDt), j.GetReactionTorque(invDt));
+            }
+            for (int i = 0; i < _weldJointCount; ++i)
+            {
+                WeldJoint j = _weldJoints[i];
+                Consider(j.BodyA, j.BodyB, j.GetReactionForce(invDt), j.GetReactionTorque(invDt));
+            }
+            for (int i = 0; i < _motorJointCount; ++i)
+            {
+                MotorJoint j = _motorJoints[i];
+                Consider(j.BodyA, j.BodyB, j.GetReactionForce(invDt), j.GetReactionTorque(invDt));
+            }
+            for (int i = 0; i < _ropeJointCount; ++i)
+            {
+                RopeJoint j = _ropeJoints[i];
+                Consider(j.BodyA, j.BodyB, j.GetReactionForce(invDt), j.GetReactionTorque(invDt));
+            }
+            for (int i = 0; i < _frictionJointCount; ++i)
+            {
+                FrictionJoint j = _frictionJoints[i];
+                Consider(j.BodyA, j.BodyB, j.GetReactionForce(invDt), j.GetReactionTorque(invDt));
+            }
+            // Gear joints don't accumulate impulse — reaction always zero.
+
+            if (events.Count > 0)
+            {
+                _events.Raise(new JointEvents(events.ToArray()));
             }
         }
 

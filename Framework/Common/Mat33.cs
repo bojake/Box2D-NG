@@ -43,6 +43,30 @@ namespace Box2DNG
             return new Vec2(a.Ex.X * v.X + a.Ey.X * v.Y, a.Ex.Y * v.X + a.Ey.Y * v.Y);
         }
 
+        public Vec3 Solve33(Vec3 b)
+        {
+            float det = Vec3.Dot(Ex, Vec3.Cross(Ey, Ez));
+            if (det != 0f)
+            {
+                det = 1f / det;
+            }
+            return new Vec3(
+                det * Vec3.Dot(b, Vec3.Cross(Ey, Ez)),
+                det * Vec3.Dot(Ex, Vec3.Cross(b, Ez)),
+                det * Vec3.Dot(Ex, Vec3.Cross(Ey, b)));
+        }
+
+        public Vec2 Solve22(Vec2 b)
+        {
+            float a11 = Ex.X, a12 = Ey.X, a21 = Ex.Y, a22 = Ey.Y;
+            float det = a11 * a22 - a12 * a21;
+            if (det != 0f)
+            {
+                det = 1f / det;
+            }
+            return new Vec2(det * (a22 * b.X - a12 * b.Y), det * (a11 * b.Y - a21 * b.X));
+        }
+
         public override string ToString() => $"[{Ex} {Ey} {Ez}]";
     }
 }

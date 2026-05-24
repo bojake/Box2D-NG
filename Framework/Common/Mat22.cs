@@ -40,6 +40,28 @@ namespace Box2DNG
             return new Vec2(Vec2.Dot(v, a.Ex), Vec2.Dot(v, a.Ey));
         }
 
+        public Mat22 GetInverse()
+        {
+            float a = Ex.X, b = Ey.X, c = Ex.Y, d = Ey.Y;
+            float det = a * d - b * c;
+            if (det != 0f)
+            {
+                det = 1f / det;
+            }
+            return new Mat22(new Vec2(det * d, -det * c), new Vec2(-det * b, det * a));
+        }
+
+        public Vec2 Solve(Vec2 b)
+        {
+            float a11 = Ex.X, a12 = Ey.X, a21 = Ex.Y, a22 = Ey.Y;
+            float det = a11 * a22 - a12 * a21;
+            if (det != 0f)
+            {
+                det = 1f / det;
+            }
+            return new Vec2(det * (a22 * b.X - a12 * b.Y), det * (a11 * b.Y - a21 * b.X));
+        }
+
         public override string ToString() => $"[{Ex} {Ey}]";
     }
 }

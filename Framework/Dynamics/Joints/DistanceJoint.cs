@@ -41,5 +41,19 @@ namespace Box2DNG
         
         public bool CollideConnected => _world._distanceJointsData[Index].CollideConnected; // Usually immutable
 
+        public float GetCurrentLength()
+        {
+            Vec2 pA = Transform.Mul(BodyA.Transform, LocalAnchorA);
+            Vec2 pB = Transform.Mul(BodyB.Transform, LocalAnchorB);
+            return (pB - pA).Length;
+        }
+
+        public Vec2 GetReactionForce(float invDt)
+        {
+            ref DistanceJointData data = ref _world._distanceJointsData[Index];
+            return (data.Impulse * invDt) * data.U;
+        }
+
+        public float GetReactionTorque(float invDt) => 0f;
     }
 }

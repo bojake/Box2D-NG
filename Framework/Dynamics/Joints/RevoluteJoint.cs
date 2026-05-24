@@ -66,6 +66,17 @@ namespace Box2DNG
             return World._revoluteJointsData[Index].MotorImpulse * invDt;
         }
 
+        public Vec2 GetReactionForce(float invDt)
+        {
+            return invDt * World._revoluteJointsData[Index].Impulse;
+        }
+
+        public float GetReactionTorque(float invDt)
+        {
+            ref RevoluteJointData data = ref World._revoluteJointsData[Index];
+            return invDt * (data.MotorImpulse + data.LimitImpulse);
+        }
+
         public float GetJointAngle()
         {
              Body bA = BodyA;

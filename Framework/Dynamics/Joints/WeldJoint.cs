@@ -21,5 +21,15 @@ namespace Box2DNG
         public Vec2 LocalAnchorB => World._weldJointsData[Index].LocalAnchorB;
         public float ReferenceAngle => World._weldJointsData[Index].ReferenceAngle;
         public bool CollideConnected => World._weldJointsData[Index].CollideConnected;
+
+        public Vec2 GetReactionForce(float invDt)
+        {
+            return invDt * World._weldJointsData[Index].Impulse;
+        }
+
+        public float GetReactionTorque(float invDt)
+        {
+            return invDt * World._weldJointsData[Index].AngularImpulse;
+        }
     }
 }

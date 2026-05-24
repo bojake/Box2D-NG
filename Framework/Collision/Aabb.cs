@@ -40,6 +40,21 @@ namespace Box2DNG
                    other.UpperBound.Y <= UpperBound.Y;
         }
 
+        public static Aabb Union(Aabb a, Aabb b)
+        {
+            Vec2 lower = new Vec2(MathF.Min(a.LowerBound.X, b.LowerBound.X), MathF.Min(a.LowerBound.Y, b.LowerBound.Y));
+            Vec2 upper = new Vec2(MathF.Max(a.UpperBound.X, b.UpperBound.X), MathF.Max(a.UpperBound.Y, b.UpperBound.Y));
+            return new Aabb(lower, upper);
+        }
+
+        public static bool Overlaps(Aabb a, Aabb b)
+        {
+            return !(b.LowerBound.X > a.UpperBound.X ||
+                     b.LowerBound.Y > a.UpperBound.Y ||
+                     a.LowerBound.X > b.UpperBound.X ||
+                     a.LowerBound.Y > b.UpperBound.Y);
+        }
+
         public override string ToString() => $"[{LowerBound} -> {UpperBound}]";
     }
 }

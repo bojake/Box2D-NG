@@ -25,5 +25,25 @@ namespace Box2DNG
         public float LengthB => World._pulleyJointsData[Index].LengthB;
         public float Ratio => World._pulleyJointsData[Index].Ratio;
         public bool CollideConnected => World._pulleyJointsData[Index].CollideConnected;
+
+        public float GetCurrentLengthA()
+        {
+            Vec2 p = Transform.Mul(BodyA.Transform, LocalAnchorA);
+            return (p - GroundAnchorA).Length;
+        }
+
+        public float GetCurrentLengthB()
+        {
+            Vec2 p = Transform.Mul(BodyB.Transform, LocalAnchorB);
+            return (p - GroundAnchorB).Length;
+        }
+
+        public Vec2 GetReactionForce(float invDt)
+        {
+            ref PulleyJointData data = ref World._pulleyJointsData[Index];
+            return (data.Impulse * invDt) * data.UB;
+        }
+
+        public float GetReactionTorque(float invDt) => 0f;
     }
 }

@@ -12,6 +12,7 @@ namespace Box2DNG
         public bool IsSensor { get; internal set; }
         public bool EnableSensorEvents { get; internal set; } = true;
         public Filter Filter { get; internal set; }
+        public SurfaceMaterial Material { get; internal set; }
         public object? UserData { get; internal set; }
         public int Id { get; internal set; } = -1;
         public int ProxyId { get; internal set; } = -1;
@@ -26,6 +27,7 @@ namespace Box2DNG
             Density = 1f;
             IsSensor = false;
             Filter = Filter.Default;
+            Material = new SurfaceMaterial(Friction, Restitution, 0f, 0f, 0, 0);
         }
 
         public void SetSensorEventsEnabled(bool enable)

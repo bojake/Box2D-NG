@@ -65,14 +65,29 @@ namespace Box2DNG
                     Vec2 normal = worldManifold.Normal;
                     Vec2 tangent = new Vec2(-normal.Y, normal.X);
 
+                    SurfaceMaterial matA = fixtureA.Material;
+                    SurfaceMaterial matB = fixtureB.Material;
+                    float mixedRolling = 0f;
+                    if (matA.RollingResistance > 0f || matB.RollingResistance > 0f)
+                    {
+                        float maxRadius = System.MathF.Max(radiusA, radiusB);
+                        mixedRolling = System.MathF.Max(matA.RollingResistance, matB.RollingResistance) * maxRadius;
+                    }
+                    float invIAval = _world._bodyInverseInertias[bodyA.Id];
+                    float invIBval = _world._bodyInverseInertias[bodyB.Id];
+                    float rollingK = invIAval + invIBval;
+
                     ContactConstraint constraint = new ContactConstraint(contact, bodyA.Id, bodyB.Id, normal, tangent, contact.Manifold.PointCount)
                     {
                         Friction = _world.MixFriction(fixtureA, fixtureB),
                         Restitution = _world.MixRestitution(fixtureA, fixtureB),
+                        RollingResistance = mixedRolling,
+                        RollingMass = rollingK > 0f ? 1f / rollingK : 0f,
+                        TangentSpeed = matA.TangentSpeed + matB.TangentSpeed,
                         InvMassA = _world._bodyInverseMasses[bodyA.Id],
-                        InvIA = _world._bodyInverseInertias[bodyA.Id],
+                        InvIA = invIAval,
                         InvMassB = _world._bodyInverseMasses[bodyB.Id],
-                        InvIB = _world._bodyInverseInertias[bodyB.Id]
+                        InvIB = invIBval
                     };
 
                     Vec2 centerA = bodyA.GetWorldCenter();
@@ -241,14 +256,29 @@ namespace Box2DNG
                         Vec2 normal = worldManifold.Normal;
                         Vec2 tangent = new Vec2(-normal.Y, normal.X);
 
+                        SurfaceMaterial graphMatA = fixtureA.Material;
+                        SurfaceMaterial graphMatB = fixtureB.Material;
+                        float graphMixedRolling = 0f;
+                        if (graphMatA.RollingResistance > 0f || graphMatB.RollingResistance > 0f)
+                        {
+                            float maxRadius = System.MathF.Max(radiusA, radiusB);
+                            graphMixedRolling = System.MathF.Max(graphMatA.RollingResistance, graphMatB.RollingResistance) * maxRadius;
+                        }
+                        float graphInvIA = _world._bodyInverseInertias[bodyA.Id];
+                        float graphInvIB = _world._bodyInverseInertias[bodyB.Id];
+                        float graphRollingK = graphInvIA + graphInvIB;
+
                         ContactConstraint constraint = new ContactConstraint(contact, bodyA.Id, bodyB.Id, normal, tangent, contact.Manifold.PointCount)
                         {
                             Friction = _world.MixFriction(fixtureA, fixtureB),
                             Restitution = _world.MixRestitution(fixtureA, fixtureB),
+                            RollingResistance = graphMixedRolling,
+                            RollingMass = graphRollingK > 0f ? 1f / graphRollingK : 0f,
+                            TangentSpeed = graphMatA.TangentSpeed + graphMatB.TangentSpeed,
                             InvMassA = _world._bodyInverseMasses[bodyA.Id],
-                            InvIA = _world._bodyInverseInertias[bodyA.Id],
+                            InvIA = graphInvIA,
                             InvMassB = _world._bodyInverseMasses[bodyB.Id],
-                            InvIB = _world._bodyInverseInertias[bodyB.Id]
+                            InvIB = graphInvIB
                         };
 
                         Vec2 centerA = bodyA.GetWorldCenter();
@@ -593,6 +623,8 @@ namespace Box2DNG
                 float mB = constraint.InvMassB;
                 float iB = constraint.InvIB;
 
+                float totalNormalImpulse = 0f;
+
                 for (int p = 0; p < constraint.PointCount; ++p)
                 {
                     ContactConstraintPoint cp = constraint.Points[p];
@@ -607,6 +639,7 @@ namespace Box2DNG
                     impulse = newImpulse - cp.NormalImpulse;
                     cp.NormalImpulse = newImpulse;
                     cp.TotalNormalImpulse += impulse;
+                    totalNormalImpulse += newImpulse;
 
                     Vec2 P = impulse * constraint.Normal;
                     vA -= mA * P;
@@ -638,6 +671,17 @@ namespace Box2DNG
                     wB += iB * Vec2.Cross(cp.RB, P);
 
                     constraint.Points[p] = cp;
+                }
+
+                if (constraint.RollingResistance > 0f)
+                {
+                    float deltaLambda = -constraint.RollingMass * (wB - wA);
+                    float lambda = constraint.RollingImpulse;
+                    float maxLambda = constraint.RollingResistance * totalNormalImpulse;
+                    constraint.RollingImpulse = MathFng.Clamp(lambda + deltaLambda, -maxLambda, maxLambda);
+                    deltaLambda = constraint.RollingImpulse - lambda;
+                    wA -= iA * deltaLambda;
+                    wB += iB * deltaLambda;
                 }
 
                 _world._bodyLinearVelocities[indexA] = vA;
@@ -1576,6 +1620,7 @@ namespace Box2DNG
                 public float Restitution;
                 public float RollingResistance;
                 public float RollingImpulse;
+                public float RollingMass;
                 public float TangentSpeed;
                 public float InvMassA;
                 public float InvIA;
@@ -1595,6 +1640,7 @@ namespace Box2DNG
                     Restitution = 0f;
                     RollingResistance = 0f;
                     RollingImpulse = 0f;
+                    RollingMass = 0f;
                     TangentSpeed = 0f;
                     InvMassA = 0f;
                     InvIA = 0f;

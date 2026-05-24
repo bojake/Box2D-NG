@@ -197,5 +197,18 @@ namespace Box2DNG
         {
             return World._prismaticJointsData[Index].MotorImpulse * invDt;
         }
+
+        public Vec2 GetReactionForce(float invDt)
+        {
+            ref PrismaticJointData data = ref World._prismaticJointsData[Index];
+            float axialImpulse = data.MotorImpulse + data.SpringImpulse + data.LowerImpulse - data.UpperImpulse;
+            Vec2 force = invDt * (data.Impulse.X * data.Perp + axialImpulse * data.Axis);
+            return force;
+        }
+
+        public float GetReactionTorque(float invDt)
+        {
+            return invDt * World._prismaticJointsData[Index].Impulse.Y;
+        }
     }
 }

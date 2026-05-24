@@ -21,5 +21,10 @@ namespace Box2DNG
         public Body BodyD => World.GetBody(World._gearJointsData[Index].BodyD);
         public float Ratio => World._gearJointsData[Index].Ratio;
         public bool CollideConnected => World._gearJointsData[Index].CollideConnected;
+
+        // Gear constraints are solved per-step without accumulated impulse, so
+        // reaction force/torque are not meaningful here. Returns zero for API parity.
+        public Vec2 GetReactionForce(float invDt) => Vec2.Zero;
+        public float GetReactionTorque(float invDt) => 0f;
     }
 }

@@ -26,5 +26,20 @@ namespace Box2DNG
         {
             World._ropeJointsData[Index].MaxLength = MathF.Max(Constants.LinearSlop, maxLength);
         }
+
+        public float GetCurrentLength()
+        {
+            Vec2 pA = Transform.Mul(BodyA.Transform, LocalAnchorA);
+            Vec2 pB = Transform.Mul(BodyB.Transform, LocalAnchorB);
+            return (pB - pA).Length;
+        }
+
+        public Vec2 GetReactionForce(float invDt)
+        {
+            ref RopeJointData data = ref World._ropeJointsData[Index];
+            return (data.Impulse * invDt) * data.U;
+        }
+
+        public float GetReactionTorque(float invDt) => 0f;
     }
 }

@@ -263,6 +263,8 @@ namespace Box2DNG
                 }
                 _world.SolveTOI();
                 _world.UpdateSensors();
+                _world.RaiseBodyEvents();
+                _world.RaiseJointEvents(timeStep > 0f ? 1f / timeStep : 0f);
             }
 
             private static World.ContactSolverStats SumStats(World.ContactSolverStats a, World.ContactSolverStats b)

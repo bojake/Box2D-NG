@@ -48,9 +48,51 @@ namespace Box2DNG
 
         public static float Atan2(float y, float x) => MathF.Atan2(y, x);
 
+        public static float UnwindAngle(float radians) => MathF.IEEERemainder(radians, 2f * MathF.PI);
+
+        // Approximate cos/sin via Bhaskara I formula — used for cross-platform determinism
+        // when ULP-identical results are required. Mirrors b2ComputeCosSin in
+        // box2d-cpp/src/math_functions.c. Max absolute error ~1.6e-3 vs. MathF.Sin/Cos.
+        // Not used by Rot(angle) by default; physics tests (e.g. wheel-joint friction) are
+        // calibrated against MathF precision. Call this directly when determinism trumps accuracy.
         public static CosSin ComputeCosSin(float radians)
         {
-            return new CosSin(MathF.Cos(radians), MathF.Sin(radians));
+            float x = UnwindAngle(radians);
+            float pi2 = MathF.PI * MathF.PI;
+
+            float c;
+            if (x < -0.5f * MathF.PI)
+            {
+                float y = x + MathF.PI;
+                float y2 = y * y;
+                c = -(pi2 - 4f * y2) / (pi2 + y2);
+            }
+            else if (x > 0.5f * MathF.PI)
+            {
+                float y = x - MathF.PI;
+                float y2 = y * y;
+                c = -(pi2 - 4f * y2) / (pi2 + y2);
+            }
+            else
+            {
+                float y2 = x * x;
+                c = (pi2 - 4f * y2) / (pi2 + y2);
+            }
+
+            float s;
+            if (x < 0f)
+            {
+                float y = x + MathF.PI;
+                s = -16f * y * (MathF.PI - y) / (5f * pi2 - 4f * y * (MathF.PI - y));
+            }
+            else
+            {
+                s = 16f * x * (MathF.PI - x) / (5f * pi2 - 4f * x * (MathF.PI - x));
+            }
+
+            float mag = MathF.Sqrt(s * s + c * c);
+            float invMag = mag > 0f ? 1f / mag : 0f;
+            return new CosSin(c * invMag, s * invMag);
         }
 
         public static float Min(float a, float b) => a < b ? a : b;

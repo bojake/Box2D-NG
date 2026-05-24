@@ -44,5 +44,21 @@ namespace Box2DNG
             data.LowerTranslation = MathF.Min(lower, upper);
             data.UpperTranslation = MathF.Max(lower, upper);
         }
+
+        public Vec2 GetReactionForce(float invDt)
+        {
+            ref WheelJointData data = ref World._wheelJointsData[Index];
+            Vec2 axis = Rot.Mul(BodyA.Transform.Q, data.LocalAxisA);
+            Vec2 perp = new Vec2(-axis.Y, axis.X);
+            float axialImpulse = data.SpringImpulse + data.LowerImpulse - data.UpperImpulse;
+            return invDt * (data.Impulse * perp + axialImpulse * axis);
+        }
+
+        public float GetReactionTorque(float invDt)
+        {
+            return invDt * World._wheelJointsData[Index].MotorImpulse;
+        }
+
+        public float GetMotorTorque(float invDt) => invDt * World._wheelJointsData[Index].MotorImpulse;
     }
 }

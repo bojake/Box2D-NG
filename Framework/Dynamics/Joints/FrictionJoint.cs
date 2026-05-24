@@ -32,5 +32,15 @@ namespace Box2DNG
         {
             World._frictionJointsData[Index].MaxTorque = MathF.Max(0f, maxTorque);
         }
+
+        public Vec2 GetReactionForce(float invDt)
+        {
+            return invDt * World._frictionJointsData[Index].LinearImpulse;
+        }
+
+        public float GetReactionTorque(float invDt)
+        {
+            return invDt * World._frictionJointsData[Index].AngularImpulse;
+        }
     }
 }

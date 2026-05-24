@@ -88,13 +88,17 @@ namespace Box2DNG
     public readonly struct BodyEvent
     {
         public readonly object? UserData;
-        public readonly Vec2 Position;
+        public readonly Transform Transform;
+        public readonly bool FellAsleep;
 
-        public BodyEvent(object? userData, Vec2 position)
+        public BodyEvent(object? userData, Transform transform, bool fellAsleep)
         {
             UserData = userData;
-            Position = position;
+            Transform = transform;
+            FellAsleep = fellAsleep;
         }
+
+        public Vec2 Position => Transform.P;
     }
 
     public readonly struct ContactBeginEvent

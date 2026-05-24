@@ -24,5 +24,15 @@ namespace Box2DNG
         public float MaxTorque => World._motorJointsData[Index].MaxTorque;
         public float CorrectionFactor => World._motorJointsData[Index].CorrectionFactor;
         public bool CollideConnected => World._motorJointsData[Index].CollideConnected;
+
+        public Vec2 GetReactionForce(float invDt)
+        {
+            return invDt * World._motorJointsData[Index].LinearImpulse;
+        }
+
+        public float GetReactionTorque(float invDt)
+        {
+            return invDt * World._motorJointsData[Index].AngularImpulse;
+        }
     }
 }

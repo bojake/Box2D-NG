@@ -23,6 +23,8 @@ namespace Box2DNG
         public int MaxSubSteps { get; private set; } = 16;
         public int VelocityIterations { get; private set; } = 12;
         public int PositionIterations { get; private set; } = 6;
+        public float JointForceThreshold { get; private set; } = float.MaxValue;
+        public float JointTorqueThreshold { get; private set; } = float.MaxValue;
         public int WorkerCount { get; private set; } = 1;
         public int ArenaCapacity { get; private set; } = 1024 * 1024;
         public object? UserData { get; private set; }
@@ -49,6 +51,8 @@ namespace Box2DNG
         public WorldDef WithMaxSubSteps(int steps) { MaxSubSteps = Math.Max(1, steps); return this; }
         public WorldDef WithVelocityIterations(int iterations) { VelocityIterations = Math.Max(1, iterations); return this; }
         public WorldDef WithPositionIterations(int iterations) { PositionIterations = Math.Max(1, iterations); return this; }
+        public WorldDef WithJointForceThreshold(float threshold) { JointForceThreshold = Math.Max(0f, threshold); return this; }
+        public WorldDef WithJointTorqueThreshold(float threshold) { JointTorqueThreshold = Math.Max(0f, threshold); return this; }
         public WorldDef WithWorkerCount(int count) { WorkerCount = Math.Max(1, count); return this; }
         public WorldDef WithArenaCapacity(int bytes) { ArenaCapacity = Math.Max(0, bytes); return this; }
         public WorldDef WithUserData(object? data) { UserData = data; return this; }
