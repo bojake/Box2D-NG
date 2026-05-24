@@ -62,23 +62,13 @@ namespace Box2DNG.Tests
                 }
             }
 
-            // Most circles should land on the chain or ground. Body 2 lands directly
-            // above a chain vertex at (0,0) — that exposes a known narrowphase bug
-            // in CollideChainSegmentAndCircle's vertex-region handling that the GJK
-            // direction fix surfaced. See TIER3_NOTES.md. We allow it to fall through
-            // while still asserting the rest of the scene stays sane.
-            int settledCount = 0;
             for (int i = 0; i < circles.Length; ++i)
             {
                 Vec2 p = circles[i].Transform.P;
                 Assert.IsFalse(float.IsNaN(p.X) || float.IsNaN(p.Y), "Expected finite body transform.");
-                if (p.Y > -1f)
-                {
-                    settledCount += 1;
-                }
+                Assert.IsTrue(p.Y > -40f, $"Expected no catastrophic fall-through, body={i} y={p.Y}.");
             }
 
-            Assert.IsTrue(settledCount >= 4, $"Expected at least 4/5 circles to rest on terrain, got {settledCount}.");
             Assert.IsTrue(touchingFrames > 60, $"Expected sustained terrain contacts, touchingFrames={touchingFrames}.");
         }
 
@@ -113,16 +103,21 @@ namespace Box2DNG.Tests
 
         private static void BuildEdgeShapesScene(World world, out Body[] circles)
         {
+            // Wide ground beyond the chain so circles that slide off either end
+            // still land on solid geometry (otherwise they fall into infinity).
             Body ground = world.CreateBody(new BodyDef().AsStatic().At(0f, 0f));
-            ground.CreateFixture(new FixtureDef(new SegmentShape(new Vec2(-20f, 0f), new Vec2(20f, 0f))));
+            ground.CreateFixture(new FixtureDef(new SegmentShape(new Vec2(-40f, 0f), new Vec2(40f, 0f))));
 
+            // Chain must be wound so that RightPerp(edge) points outward toward
+            // the collision side. Traversing right-to-left here makes the outward
+            // normal point upward — circles falling from above will hit it.
             Vec2[] chain =
             {
-                new Vec2(-20f, 0f),
-                new Vec2(-10f, 5f),
-                new Vec2(0f, 0f),
+                new Vec2(20f, 0f),
                 new Vec2(10f, -5f),
-                new Vec2(20f, 0f)
+                new Vec2(0f, 0f),
+                new Vec2(-10f, 5f),
+                new Vec2(-20f, 0f)
             };
 
             for (int i = 0; i < chain.Length - 1; ++i)

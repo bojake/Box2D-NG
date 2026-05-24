@@ -303,12 +303,93 @@ namespace Box2DNG
 
         public static void CollideChainSegmentAndCircle(Manifold manifold, ChainSegment chainA, Transform xfA, Circle circleB, Transform xfB)
         {
-            ShapeProxy proxyA = ShapeProxyFactory.FromSegment(chainA.Segment);
-            ShapeProxy proxyB = ShapeProxyFactory.FromCircle(circleB);
-            if (!TryBuildDistanceManifoldOneSided(manifold, chainA, xfA, proxyA, proxyB, xfB))
+            // Port of b2CollideChainSegmentAndCircle from box2d-cpp/src/manifold.c:1089.
+            // Works in segment-local space using barycentric u/v to pick the Voronoi
+            // region (edge, p1-corner, or p2-corner), then uses the ghost vertices to
+            // *reject* corner-region contacts that belong to a neighbouring segment.
+            manifold.PointCount = 0;
+
+            // Bring circle B's center into A's local frame.
+            Vec2 pBWorld = Transform.Mul(xfB, circleB.Center);
+            Vec2 pB = Transform.MulT(xfA, pBWorld);
+
+            Vec2 p1 = chainA.Segment.Point1;
+            Vec2 p2 = chainA.Segment.Point2;
+            Vec2 e = p2 - p1;
+
+            // Chains are one-sided: normal points to the right of the edge. Reject
+            // anything on the back side.
+            float offset = Vec2.Dot(MathFng.RightPerp(e), pB - p1);
+            if (offset < 0f)
             {
-                manifold.PointCount = 0;
+                return;
             }
+
+            // Unnormalised barycentric coordinates.
+            float u = Vec2.Dot(e, p2 - pB);
+            float v = Vec2.Dot(e, pB - p1);
+
+            Vec2 pA;
+
+            if (v <= 0f)
+            {
+                // Behind p1 — possibly in the Voronoi region of the previous edge.
+                // If so, the previous chain segment owns this contact and we skip.
+                Vec2 prevEdge = p1 - chainA.Ghost1;
+                float uPrev = Vec2.Dot(prevEdge, pB - p1);
+                if (uPrev <= 0f)
+                {
+                    return;
+                }
+                pA = p1;
+            }
+            else if (u <= 0f)
+            {
+                // Ahead of p2 — possibly in the Voronoi region of the next edge.
+                Vec2 nextEdge = chainA.Ghost2 - p2;
+                float vNext = Vec2.Dot(nextEdge, pB - p2);
+                if (vNext > 0f)
+                {
+                    return;
+                }
+                pA = p2;
+            }
+            else
+            {
+                // Edge region — project pB onto the edge.
+                float ee = Vec2.Dot(e, e);
+                Vec2 weighted = new Vec2(u * p1.X + v * p2.X, u * p1.Y + v * p2.Y);
+                pA = ee > 0f ? weighted * (1f / ee) : p1;
+            }
+
+            Vec2 d = pB - pA;
+            float distSqr = d.LengthSquared;
+            float radius = circleB.Radius + Constants.PolygonRadius;
+            if (distSqr > radius * radius)
+            {
+                return;
+            }
+
+            Vec2 normal;
+            if (distSqr > Constants.Epsilon * Constants.Epsilon)
+            {
+                normal = d * (1f / MathF.Sqrt(distSqr));
+            }
+            else
+            {
+                // Coincident — fall back to the segment's outward normal.
+                normal = MathFng.RightPerp(e).Normalize();
+                if (normal.LengthSquared <= Constants.Epsilon * Constants.Epsilon)
+                {
+                    normal = new Vec2(0f, 1f);
+                }
+            }
+
+            manifold.Type = ManifoldType.FaceA;
+            manifold.LocalNormal = normal; // already in A-local frame
+            manifold.LocalPoint = pA;      // already in A-local frame
+            manifold.Points[0] = new ManifoldPoint(circleB.Center, 0f, 0f, new ContactFeature(0, 0, 0, 0));
+            manifold.PointCount = 1;
         }
 
         public static void CollideChainSegmentAndCapsule(Manifold manifold, ChainSegment chainA, Transform xfA, Capsule capsuleB, Transform xfB)
