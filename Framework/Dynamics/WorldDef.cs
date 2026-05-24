@@ -25,6 +25,12 @@ namespace Box2DNG
         public int PositionIterations { get; private set; } = 6;
         public float JointForceThreshold { get; private set; } = float.MaxValue;
         public float JointTorqueThreshold { get; private set; } = float.MaxValue;
+        // Global soft-constraint default for joints whose own Hertz is 0 (rigid).
+        // Matches cpp box2d v3's per-world `b2_constraintSoftness` ([solver.h:170](../box2d-cpp/src/solver.h:170)).
+        // Default (0, 0) preserves the legacy split-impulse / hard-constraint
+        // behaviour for joints that don't opt into Hertz-driven stiffness.
+        public float JointHertz { get; private set; }
+        public float JointDampingRatio { get; private set; }
         public int WorkerCount { get; private set; } = 1;
         public int ArenaCapacity { get; private set; } = 1024 * 1024;
         public object? UserData { get; private set; }
@@ -53,6 +59,8 @@ namespace Box2DNG
         public WorldDef WithPositionIterations(int iterations) { PositionIterations = Math.Max(1, iterations); return this; }
         public WorldDef WithJointForceThreshold(float threshold) { JointForceThreshold = Math.Max(0f, threshold); return this; }
         public WorldDef WithJointTorqueThreshold(float threshold) { JointTorqueThreshold = Math.Max(0f, threshold); return this; }
+        public WorldDef WithJointHertz(float hertz) { JointHertz = Math.Max(0f, hertz); return this; }
+        public WorldDef WithJointDampingRatio(float ratio) { JointDampingRatio = Math.Max(0f, ratio); return this; }
         public WorldDef WithWorkerCount(int count) { WorkerCount = Math.Max(1, count); return this; }
         public WorldDef WithArenaCapacity(int bytes) { ArenaCapacity = Math.Max(0, bytes); return this; }
         public WorldDef WithUserData(object? data) { UserData = data; return this; }

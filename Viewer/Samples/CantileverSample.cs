@@ -11,12 +11,17 @@ namespace Box2DNG.Viewer.Samples
             Body ground = world.CreateBody(new BodyDef().AsStatic().At(0f, 0f));
             ground.CreateFixture(new FixtureDef(new SegmentShape(new Vec2(-40f, 0f), new Vec2(40f, 0f))));
 
-            // Welded chain bodies use linear/angular damping to suppress the
-            // residual oscillation introduced by per-contact TOI sub-stepping
-            // (which solves one contact at a time and so violates joint
-            // constraints when chains are coupled). Matches the cpp Cantilever
-            // sample which sets linear/angular damping ratios on its soft welds
-            // for the same reason; see box2d-cpp/samples/sample_joints.cpp.
+            // Phase 1 of TIER4_PARITY_PLAN added the soft-weld API
+            // (`WeldJointDef.WithLinearSpring` / `WithAngularSpring`) but the
+            // Cantilever scene's many chains don't yet stabilize on top of
+            // it — cpp's Cantilever uses subStepCount=4 (which we get in
+            // Phase 2) and per-joint constraint tuning. Until that lands, the
+            // chain bodies keep their body-level damping workaround. The
+            // sample-level switch to soft welds happens in Phase 2 once the
+            // sub-step solver is in place.
+            WeldJointDef ChainWeld(Body a, Body b, Vec2 anchor) =>
+                new WeldJointDef(a, b, anchor);
+
             BodyDef ChainBody(float x, float y) => new BodyDef()
                 .AsDynamic()
                 .At(x, y)
@@ -32,7 +37,7 @@ namespace Box2DNG.Viewer.Samples
                 {
                     Body body = world.CreateBody(ChainBody(-14.5f + i, 5f));
                     body.CreateFixture(fd);
-                    world.CreateJoint(new WeldJointDef(prevBody, body, new Vec2(-15f + i, 5f)));
+                    world.CreateJoint(ChainWeld(prevBody, body, new Vec2(-15f + i, 5f)));
                     prevBody = body;
                 }
             }
@@ -46,7 +51,7 @@ namespace Box2DNG.Viewer.Samples
                 {
                     Body body = world.CreateBody(ChainBody(-14f + 2f * i, 15f));
                     body.CreateFixture(fd);
-                    world.CreateJoint(new WeldJointDef(prevBody, body, new Vec2(-15f + 2f * i, 15f)));
+                    world.CreateJoint(ChainWeld(prevBody, body, new Vec2(-15f + 2f * i, 15f)));
                     prevBody = body;
                 }
             }
@@ -63,7 +68,7 @@ namespace Box2DNG.Viewer.Samples
 
                     if (i > 0)
                     {
-                        world.CreateJoint(new WeldJointDef(prevBody, body, new Vec2(-5f + i, 5f)));
+                        world.CreateJoint(ChainWeld(prevBody, body, new Vec2(-5f + i, 5f)));
                     }
 
                     prevBody = body;
@@ -82,7 +87,7 @@ namespace Box2DNG.Viewer.Samples
 
                     if (i > 0)
                     {
-                        world.CreateJoint(new WeldJointDef(prevBody, body, new Vec2(5f + i, 10f)));
+                        world.CreateJoint(ChainWeld(prevBody, body, new Vec2(5f + i, 10f)));
                     }
 
                     prevBody = body;

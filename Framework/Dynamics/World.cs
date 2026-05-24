@@ -152,6 +152,8 @@ namespace Box2DNG
             _bodyCapacity = newCapacity;
         }
 
+        public WorldDef Def => _def;
+
         public World(WorldDef def)
         {
             _def = def ?? throw new ArgumentNullException(nameof(def));
@@ -891,6 +893,14 @@ namespace Box2DNG
             int index = _weldJointCount;
             WeldJoint joint = new WeldJoint(this, id, index);
             _weldJoints[index] = joint;
+            // Capture the rest-state world anchor delta. The soft linear spring
+            // drives `(current B anchor) - (current A anchor) - DeltaCenter`
+            // back toward zero — DeltaCenter is the joint's reference and
+            // must be fixed at creation, not re-captured each step (which
+            // would erase the very drift we want to correct).
+            Vec2 worldAnchorA = Transform.Mul(def.BodyA.Transform, def.LocalAnchorA);
+            Vec2 worldAnchorB = Transform.Mul(def.BodyB.Transform, def.LocalAnchorB);
+
             _weldJointsData[index] = new WeldJointData
             {
                 Id = id,
@@ -899,7 +909,12 @@ namespace Box2DNG
                 CollideConnected = def.CollideConnected,
                 LocalAnchorA = def.LocalAnchorA,
                 LocalAnchorB = def.LocalAnchorB,
-                ReferenceAngle = def.ReferenceAngle
+                ReferenceAngle = def.ReferenceAngle,
+                LinearHertz = def.LinearHertz,
+                LinearDampingRatio = def.LinearDampingRatio,
+                AngularHertz = def.AngularHertz,
+                AngularDampingRatio = def.AngularDampingRatio,
+                DeltaCenter = worldAnchorB - worldAnchorA,
             };
             _weldJointCount++;
 
