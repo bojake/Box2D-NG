@@ -36,16 +36,6 @@ namespace Box2DNG
             return d.X >= 0f && d.Y >= 0f;
         }
 
-        public static bool IsValidPlane(Plane plane)
-        {
-            if (!IsValidVec2(plane.Normal) || !IsValidFloat(plane.Offset))
-            {
-                return false;
-            }
-            float length = plane.Normal.Length;
-            return MathF.Abs(length - 1f) <= 0.01f;
-        }
-
         public static float Atan2(float y, float x) => MathF.Atan2(y, x);
 
         public static float UnwindAngle(float radians) => MathF.IEEERemainder(radians, 2f * MathF.PI);

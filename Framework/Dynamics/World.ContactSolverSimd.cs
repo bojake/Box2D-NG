@@ -721,6 +721,10 @@ namespace Box2DNG
                 float[] friction = new float[width];
                 float[] bias = new float[width];
                 float[] softness = new float[width];
+                float[] tangentSpeed = new float[width];
+                float[] rollingMass = new float[width];
+                float[] rollingResistance = new float[width];
+                float[] rollingImpulse = new float[width];
 
                 for (int lane = 0; lane < width; ++lane)
                 {
@@ -759,6 +763,10 @@ namespace Box2DNG
                     friction[lane] = constraint.Friction;
                     bias[lane] = useBias ? cp.Bias : 0f;
                     softness[lane] = cp.Softness;
+                    tangentSpeed[lane] = constraint.TangentSpeed;
+                    rollingMass[lane] = constraint.RollingMass;
+                    rollingResistance[lane] = constraint.RollingResistance;
+                    rollingImpulse[lane] = constraint.RollingImpulse;
                 }
 
                 Vector<float> vAxV = new Vector<float>(vAx);
@@ -790,6 +798,10 @@ namespace Box2DNG
                 Vector<float> frictionV = new Vector<float>(friction);
                 Vector<float> biasV = new Vector<float>(bias);
                 Vector<float> softnessV = new Vector<float>(softness);
+                Vector<float> tangentSpeedV = new Vector<float>(tangentSpeed);
+                Vector<float> rollingMassV = new Vector<float>(rollingMass);
+                Vector<float> rollingResistanceV = new Vector<float>(rollingResistance);
+                Vector<float> rollingImpulseV = new Vector<float>(rollingImpulse);
 
                 Vector<float> crossAx = -wAV * rAyV;
                 Vector<float> crossAy = wAV * rAxV;
@@ -821,7 +833,7 @@ namespace Box2DNG
 
                 dvx = (vBxV + crossBx) - (vAxV + crossAx);
                 dvy = (vByV + crossBy) - (vAyV + crossAy);
-                Vector<float> vt = dvx * tangentXV + dvy * tangentYV;
+                Vector<float> vt = dvx * tangentXV + dvy * tangentYV - tangentSpeedV;
 
                 Vector<float> tImpulse = -vt * tangentMassV;
                 Vector<float> maxFriction = frictionV * normalImpulseV;
@@ -838,6 +850,17 @@ namespace Box2DNG
                 vByV += invMassBV * Py;
                 wBV += invIBV * (rBxV * Py - rByV * Px);
 
+                // Rolling resistance — uses totalNormalImpulse, which for a single-point
+                // constraint is normalImpulseV (post-update).
+                Vector<float> rollDelta = -rollingMassV * (wBV - wAV);
+                Vector<float> rollLambda = rollingImpulseV;
+                Vector<float> rollMaxLambda = rollingResistanceV * normalImpulseV;
+                Vector<float> newRollingImpulse = Vector.Min(Vector.Max(rollLambda + rollDelta, -rollMaxLambda), rollMaxLambda);
+                Vector<float> rollDeltaApplied = newRollingImpulse - rollLambda;
+                rollingImpulseV = newRollingImpulse;
+                wAV -= invIAV * rollDeltaApplied;
+                wBV += invIBV * rollDeltaApplied;
+
                 vAxV.CopyTo(vAx);
                 vAyV.CopyTo(vAy);
                 wAV.CopyTo(wA);
@@ -846,6 +869,7 @@ namespace Box2DNG
                 wBV.CopyTo(wB);
                 normalImpulseV.CopyTo(normalImpulse);
                 tangentImpulseV.CopyTo(tangentImpulse);
+                rollingImpulseV.CopyTo(rollingImpulse);
 
                 for (int lane = 0; lane < width; ++lane)
                 {
@@ -863,6 +887,7 @@ namespace Box2DNG
                     cp.NormalImpulse = normalImpulse[lane];
                     cp.TangentImpulse = tangentImpulse[lane];
                     constraint.Points[0] = cp;
+                    constraint.RollingImpulse = rollingImpulse[lane];
 
                     _constraints[idx] = constraint;
                 }
@@ -909,6 +934,11 @@ namespace Box2DNG
                 float[] tMass2 = new float[width];
                 float[] bias2 = new float[width];
                 float[] softness2 = new float[width];
+
+                float[] tangentSpeed = new float[width];
+                float[] rollingMass = new float[width];
+                float[] rollingResistance = new float[width];
+                float[] rollingImpulse = new float[width];
 
                 for (int lane = 0; lane < width; ++lane)
                 {
@@ -957,6 +987,11 @@ namespace Box2DNG
                     tMass2[lane] = cp2.TangentMass;
                     bias2[lane] = useBias ? cp2.Bias : 0f;
                     softness2[lane] = cp2.Softness;
+
+                    tangentSpeed[lane] = constraint.TangentSpeed;
+                    rollingMass[lane] = constraint.RollingMass;
+                    rollingResistance[lane] = constraint.RollingResistance;
+                    rollingImpulse[lane] = constraint.RollingImpulse;
                 }
 
                 Vector<float> vAxV = new Vector<float>(vAx);
@@ -996,6 +1031,11 @@ namespace Box2DNG
                 Vector<float> tMass2V = new Vector<float>(tMass2);
                 Vector<float> bias2V = new Vector<float>(bias2);
                 Vector<float> softness2V = new Vector<float>(softness2);
+
+                Vector<float> tangentSpeedV = new Vector<float>(tangentSpeed);
+                Vector<float> rollingMassV = new Vector<float>(rollingMass);
+                Vector<float> rollingResistanceV = new Vector<float>(rollingResistance);
+                Vector<float> rollingImpulseV = new Vector<float>(rollingImpulse);
 
                 Vector<float> crossAx = -wAV * rA1yV;
                 Vector<float> crossAy = wAV * rA1xV;
@@ -1045,7 +1085,7 @@ namespace Box2DNG
                 crossBy = wBV * rB1xV;
                 dvx = (vBxV + crossBx) - (vAxV + crossAx);
                 dvy = (vByV + crossBy) - (vAyV + crossAy);
-                Vector<float> vt = dvx * tangentXV + dvy * tangentYV;
+                Vector<float> vt = dvx * tangentXV + dvy * tangentYV - tangentSpeedV;
                 Vector<float> tImpulse = -vt * tMass1V;
                 Vector<float> maxFriction = frictionV * nImp1V;
                 Vector<float> newT = Vector.Min(Vector.Max(tImp1V + tImpulse, -maxFriction), maxFriction);
@@ -1066,7 +1106,7 @@ namespace Box2DNG
                 crossBy = wBV * rB2xV;
                 dvx = (vBxV + crossBx) - (vAxV + crossAx);
                 dvy = (vByV + crossBy) - (vAyV + crossAy);
-                vt = dvx * tangentXV + dvy * tangentYV;
+                vt = dvx * tangentXV + dvy * tangentYV - tangentSpeedV;
                 tImpulse = -vt * tMass2V;
                 maxFriction = frictionV * nImp2V;
                 newT = Vector.Min(Vector.Max(tImp2V + tImpulse, -maxFriction), maxFriction);
@@ -1081,6 +1121,18 @@ namespace Box2DNG
                 vByV += invMassBV * Py;
                 wBV += invIBV * (rB2xV * Py - rB2yV * Px);
 
+                // Rolling resistance — for two-point constraints, totalNormalImpulse
+                // is the sum of both points' normal impulses after the normal pass.
+                Vector<float> totalNormalImpulseV = nImp1V + nImp2V;
+                Vector<float> rollDelta = -rollingMassV * (wBV - wAV);
+                Vector<float> rollLambda = rollingImpulseV;
+                Vector<float> rollMaxLambda = rollingResistanceV * totalNormalImpulseV;
+                Vector<float> newRollingImpulse = Vector.Min(Vector.Max(rollLambda + rollDelta, -rollMaxLambda), rollMaxLambda);
+                Vector<float> rollDeltaApplied = newRollingImpulse - rollLambda;
+                rollingImpulseV = newRollingImpulse;
+                wAV -= invIAV * rollDeltaApplied;
+                wBV += invIBV * rollDeltaApplied;
+
                 vAxV.CopyTo(vAx);
                 vAyV.CopyTo(vAy);
                 wAV.CopyTo(wA);
@@ -1091,6 +1143,7 @@ namespace Box2DNG
                 tImp1V.CopyTo(tImp1);
                 nImp2V.CopyTo(nImp2);
                 tImp2V.CopyTo(tImp2);
+                rollingImpulseV.CopyTo(rollingImpulse);
 
                 for (int lane = 0; lane < width; ++lane)
                 {
@@ -1113,6 +1166,7 @@ namespace Box2DNG
 
                     constraint.Points[0] = cp1;
                     constraint.Points[1] = cp2;
+                    constraint.RollingImpulse = rollingImpulse[lane];
                     _constraints[idx] = constraint;
                 }
             }
