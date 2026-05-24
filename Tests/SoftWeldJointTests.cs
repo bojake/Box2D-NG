@@ -104,14 +104,12 @@ namespace Box2DNG.Tests
                 .WithLinearSpring(10f, 1.0f)
                 .WithAngularSpring(10f, 1.0f));
 
-            // Settle for 5 seconds.
             for (int i = 0; i < 300; ++i)
             {
                 world.Step(1f / 60f);
             }
             float finalSpeed = hanging.LinearVelocity.Length;
             Assert.IsTrue(finalSpeed < 0.5f, $"Damped soft weld should settle. finalSpeed={finalSpeed}");
-            // Body should still be near the anchor — verifies the spring holds.
             float drift = (hanging.Transform.P - new Vec2(0f, 5f)).Length;
             Assert.IsTrue(drift < 2f, $"Damped soft weld shouldn't drift far. drift={drift}");
         }

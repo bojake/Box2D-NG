@@ -27,7 +27,16 @@ namespace Box2DNG.Tests
                 return;
             }
 
+            int subStepCount = 1;
+            string? envSub = Environment.GetEnvironmentVariable("B2_SUBSTEP");
+            if (envSub != null && int.TryParse(envSub, out int n))
+            {
+                subStepCount = Math.Max(1, n);
+            }
+            bool perBodyCCD = Environment.GetEnvironmentVariable("B2_PERBODY_CCD") == "1";
+
             Console.WriteLine();
+            Console.WriteLine($"# Sample metrics — SubStepCount={subStepCount}, UsePerBodyCCD={perBodyCCD}");
             Console.WriteLine("| Sample | peakV | lateV | peakW | minY | fellThrough |");
             Console.WriteLine("|--------|------:|------:|------:|-----:|------------:|");
 
@@ -35,7 +44,7 @@ namespace Box2DNG.Tests
             {
                 try
                 {
-                    SampleMetrics m = new SampleMetrics(sample);
+                    SampleMetrics m = new SampleMetrics(new TunedSample(sample, subStepCount, perBodyCCD));
                     m.Run(Steps);
                     Console.WriteLine(
                         $"| {sample.Name} | {m.PeakLinearSpeed:F2} | {m.LateWindowPeakSpeed:F2} | " +
@@ -46,6 +55,31 @@ namespace Box2DNG.Tests
                     Console.WriteLine($"| {sample.Name} | EXCEPTION | | | | | {ex.Message} |");
                 }
             }
+        }
+
+        /// <summary>Wraps a sample to override its world def's SubStepCount + UsePerBodyCCD.</summary>
+        private sealed class TunedSample : ISample
+        {
+            private readonly ISample _inner;
+            private readonly int _subStepCount;
+            private readonly bool _perBodyCCD;
+            public TunedSample(ISample inner, int subStepCount, bool perBodyCCD)
+            {
+                _inner = inner;
+                _subStepCount = subStepCount;
+                _perBodyCCD = perBodyCCD;
+            }
+            public string Name => _inner.Name;
+            public int SubSteps => _inner.SubSteps;
+            public WorldDef CreateWorldDef()
+            {
+                WorldDef def = _inner.CreateWorldDef().WithSubStepCount(_subStepCount);
+                if (_perBodyCCD) def = def.UsePerBodyContinuous();
+                return def;
+            }
+            public void Build(World world) => _inner.Build(world);
+            public void Step(World world, float dt) => _inner.Step(world, dt);
+            public void OnKey(char key) => _inner.OnKey(key);
         }
     }
 }

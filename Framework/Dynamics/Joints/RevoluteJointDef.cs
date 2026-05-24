@@ -16,6 +16,8 @@ namespace Box2DNG
         public float LowerAngle { get; private set; }
         public float UpperAngle { get; private set; }
         public bool CollideConnected { get; private set; }
+        public float LinearHertz { get; private set; }
+        public float LinearDampingRatio { get; private set; }
 
         public RevoluteJointDef(Body bodyA, Body bodyB, Vec2 worldAnchor)
         {
@@ -45,6 +47,20 @@ namespace Box2DNG
         public RevoluteJointDef WithCollideConnected(bool collideConnected = true)
         {
             CollideConnected = collideConnected;
+            return this;
+        }
+
+        /// <summary>
+        /// Configure the point-to-point (linear) constraint as a Hertz-driven
+        /// soft spring. Revolutes allow free rotation, so only the linear axis
+        /// has spring tuning; the motor and limit retain their existing
+        /// velocity/clamp semantics. Default (0, 0) inherits the world's
+        /// JointHertz fallback, which defaults to rigid.
+        /// </summary>
+        public RevoluteJointDef WithLinearSpring(float hertz, float dampingRatio)
+        {
+            LinearHertz = MathF.Max(0f, hertz);
+            LinearDampingRatio = MathF.Max(0f, dampingRatio);
             return this;
         }
     }

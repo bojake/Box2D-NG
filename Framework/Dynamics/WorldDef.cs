@@ -16,6 +16,13 @@ namespace Box2DNG
         public float MaximumRotation { get; private set; } = 0.5f * MathF.PI;
         public bool EnableSleep { get; private set; } = true;
         public bool EnableContinuous { get; private set; } = true;
+        // Phase 3 of TIER4_PARITY_PLAN: switch CCD from the legacy per-contact
+        // ProcessTOI loop (which sub-steps each contact and pumps energy into
+        // joint-coupled bodies — see TIER3_NOTES.md "TOI sub-stepping pumps
+        // energy in joint-coupled chains") to a per-body sweep matching cpp
+        // v3's `b2SolveContinuous`. Default false during validation; flip to
+        // true once all viewer samples settle cleanly with the new path.
+        public bool UsePerBodyCCD { get; private set; }
         public bool EnableContactSoftening { get; private set; } = true;
         public bool UseSoftConstraints { get; private set; } = true;
         public bool EnableContactHertzClamp { get; private set; }
@@ -23,6 +30,13 @@ namespace Box2DNG
         public int MaxSubSteps { get; private set; } = 16;
         public int VelocityIterations { get; private set; } = 12;
         public int PositionIterations { get; private set; } = 6;
+        // Internal sub-step count for the velocity-solve / position-integrate
+        // loop. Phase 2 of TIER4_PARITY_PLAN. Each outer Step(timeStep) runs
+        // the solver N times with h = timeStep/N — soft constraints (Phase 1)
+        // benefit because their `b2MakeSoft(hertz, ratio, h)` becomes stiffer
+        // per sub-step. Default 1 preserves the legacy single-step behaviour
+        // (byte-identical to pre-Phase-2 baseline); cpp default is 4.
+        public int SubStepCount { get; private set; } = 1;
         public float JointForceThreshold { get; private set; } = float.MaxValue;
         public float JointTorqueThreshold { get; private set; } = float.MaxValue;
         // Global soft-constraint default for joints whose own Hertz is 0 (rigid).
@@ -50,6 +64,7 @@ namespace Box2DNG
         public WorldDef WithMaximumRotation(float value) { MaximumRotation = value; return this; }
         public WorldDef EnableSleeping(bool enable) { EnableSleep = enable; return this; }
         public WorldDef EnableContinuousCollision(bool enable) { EnableContinuous = enable; return this; }
+        public WorldDef UsePerBodyContinuous(bool enable = true) { UsePerBodyCCD = enable; return this; }
         public WorldDef EnableSoftening(bool enable) { EnableContactSoftening = enable; return this; }
         public WorldDef UseSoftConstraintsSolver(bool enable) { UseSoftConstraints = enable; return this; }
         public WorldDef EnableContactHertzClamping(bool enable) { EnableContactHertzClamp = enable; return this; }
@@ -57,6 +72,7 @@ namespace Box2DNG
         public WorldDef WithMaxSubSteps(int steps) { MaxSubSteps = Math.Max(1, steps); return this; }
         public WorldDef WithVelocityIterations(int iterations) { VelocityIterations = Math.Max(1, iterations); return this; }
         public WorldDef WithPositionIterations(int iterations) { PositionIterations = Math.Max(1, iterations); return this; }
+        public WorldDef WithSubStepCount(int count) { SubStepCount = Math.Max(1, count); return this; }
         public WorldDef WithJointForceThreshold(float threshold) { JointForceThreshold = Math.Max(0f, threshold); return this; }
         public WorldDef WithJointTorqueThreshold(float threshold) { JointTorqueThreshold = Math.Max(0f, threshold); return this; }
         public WorldDef WithJointHertz(float hertz) { JointHertz = Math.Max(0f, hertz); return this; }

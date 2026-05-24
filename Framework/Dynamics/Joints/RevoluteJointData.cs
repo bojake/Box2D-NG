@@ -12,6 +12,13 @@ namespace Box2DNG
         public Vec2 LocalAnchorA;
         public Vec2 LocalAnchorB;
         public float ReferenceAngle;
+
+        // Soft point-to-point tuning (Phase 1 of TIER4_PARITY_PLAN). Hertz==0
+        // inherits the world default, which defaults to rigid behaviour.
+        public float LinearHertz;
+        public float LinearDampingRatio;
+        public Softness LinearSpring;
+        public Vec2 DeltaCenter;
         
         public bool EnableMotor;
         public float MotorSpeed;

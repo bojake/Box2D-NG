@@ -5687,6 +5687,12 @@ namespace Box2DNG
                 return;
             }
 
+            if (_def.UsePerBodyCCD)
+            {
+                SolveTOIPerBody(timeStep);
+                return;
+            }
+
             HashSet64 processed = new HashSet64(256);
             System.Collections.Generic.List<SensorHitEvent> sensorHitEvents = new System.Collections.Generic.List<SensorHitEvent>();
             HashSet64 sensorHitKeys = new HashSet64(128);
@@ -5821,6 +5827,167 @@ namespace Box2DNG
             if (sensorHitEvents.Count > 0)
             {
                 _events.Raise(new SensorHitEvents(sensorHitEvents.ToArray()));
+            }
+        }
+
+        // Phase 3 of TIER4_PARITY_PLAN: per-body CCD matching cpp v3's
+        // `b2SolveContinuous` ([box2d-cpp/src/solver.c:379](../box2d-cpp/src/solver.c)).
+        // For each fast or bullet dynamic body, sweep its shapes against the
+        // broadphase and advance the body's transform to the earliest TOI. No
+        // per-contact impulse work — the next step's regular solver handles
+        // contacts. Keeps joint-coupled structures consistent (welded chains,
+        // breakable bodies) because no body moves while its joint partners stay
+        // behind.
+        private void SolveTOIPerBody(float timeStep)
+        {
+            System.Collections.Generic.List<SensorHitEvent> sensorHitEvents =
+                new System.Collections.Generic.List<SensorHitEvent>();
+            HashSet64 sensorHitKeys = new HashSet64(128);
+
+            for (int i = 0; i < _bodies.Count; ++i)
+            {
+                Body body = _bodies[i];
+                if (body.Type != BodyType.Dynamic)
+                {
+                    continue;
+                }
+                if (_def.EnableSleep && !body.Awake)
+                {
+                    continue;
+                }
+
+                bool isBullet = body.Definition.Bullet;
+                if (!isBullet && !IsFastBody(body, timeStep))
+                {
+                    continue;
+                }
+
+                SolveContinuousBody(body, isBullet, sensorHitEvents, sensorHitKeys);
+            }
+
+            if (sensorHitEvents.Count > 0)
+            {
+                _events.Raise(new SensorHitEvents(sensorHitEvents.ToArray()));
+            }
+        }
+
+        /// <summary>
+        /// "Fast" criterion from cpp: body motion this step exceeds half the
+        /// smallest fixture extent. Bullets bypass this check (always run CCD).
+        /// </summary>
+        private static bool IsFastBody(Body body, float timeStep)
+        {
+            Vec2 translation = body.Sweep.C - body.Sweep.C0;
+            float maxDeltaPosition = translation.Length;
+            float maxVelocity = body.LinearVelocity.Length * timeStep;
+            float motion = MathF.Max(maxDeltaPosition, maxVelocity);
+
+            float minExtent = float.MaxValue;
+            for (int i = 0; i < body.Fixtures.Count; ++i)
+            {
+                Aabb a = body.Fixtures[i].Aabb;
+                float halfMin = MathF.Min(a.UpperBound.X - a.LowerBound.X, a.UpperBound.Y - a.LowerBound.Y) * 0.5f;
+                if (halfMin < minExtent) minExtent = halfMin;
+            }
+            if (minExtent >= float.MaxValue) return false;
+
+            const float safetyFactor = 0.5f;
+            return motion > safetyFactor * minExtent;
+        }
+
+        private void SolveContinuousBody(Body body, bool isBullet,
+            System.Collections.Generic.List<SensorHitEvent> sensorHitEvents,
+            HashSet64 sensorHitKeys)
+        {
+            Sweep bodySweep = body.Sweep;
+            float minFraction = 1f;
+
+            for (int f = 0; f < body.Fixtures.Count; ++f)
+            {
+                Fixture fixture = body.Fixtures[f];
+                if (fixture.IsSensor)
+                {
+                    continue;
+                }
+
+                Transform startXf = bodySweep.GetTransform(0f);
+                Transform endXf = bodySweep.GetTransform(1f);
+                Aabb startAabb = ShapeGeometry.ComputeAabb(fixture.Shape, startXf);
+                Aabb endAabb = ShapeGeometry.ComputeAabb(fixture.Shape, endXf);
+                Aabb sweptAabb = Aabb.Union(startAabb, endAabb);
+
+                Fixture localFixture = fixture;
+                Sweep localBodySweep = bodySweep;
+                float localMinFraction = minFraction;
+                Vec2 translation = bodySweep.C - bodySweep.C0;
+
+                _broadPhase.Query(otherId =>
+                {
+                    Fixture? other = _broadPhase.GetUserData(otherId);
+                    if (other == null) return true;
+                    if (other.Body == body) return true;
+
+                    // Non-bullet fast bodies only sweep against static partners
+                    // (cpp's b2SolveContinuous restricts non-bullet queries to
+                    // the static tree). Bullets sweep against everything.
+                    if (!isBullet && other.Body.Type != BodyType.Static) return true;
+
+                    if (other.IsSensor)
+                    {
+                        if (localFixture.EnableSensorEvents && ShouldSensorOverlap(other, localFixture))
+                        {
+                            if (TryShapeCast(other, localFixture, startXf, translation, out CastOutput cast) && cast.Hit)
+                            {
+                                ulong hitKey = MakeProxyPairKey(other.ProxyId, localFixture.ProxyId);
+                                // HashSet64.Add returns true if key was ALREADY
+                                // present (inverted from .NET HashSet<T>.Add).
+                                // Fire the event only on the first sighting.
+                                if (!sensorHitKeys.Add(hitKey))
+                                {
+                                    sensorHitEvents.Add(new SensorHitEvent(
+                                        other.UserData,
+                                        localFixture.UserData,
+                                        cast.Point,
+                                        cast.Normal,
+                                        cast.Fraction));
+                                }
+                            }
+                        }
+                        return true;
+                    }
+
+                    if (!ShouldCollide(localFixture, other)) return true;
+
+                    ShapeProxy proxyA = ShapeGeometry.ToProxy(localFixture.Shape);
+                    ShapeProxy proxyB = ShapeGeometry.ToProxy(other.Shape);
+                    ToiInput input = new ToiInput(proxyA, proxyB, localBodySweep, other.Body.Sweep, localMinFraction);
+                    ToiOutput output = TimeOfImpact.Compute(input);
+
+                    if (output.State == ToiState.Hit && output.Fraction > 0f && output.Fraction < localMinFraction)
+                    {
+                        localMinFraction = output.Fraction;
+                    }
+                    return true;
+                }, sweptAabb);
+
+                if (localMinFraction < minFraction) minFraction = localMinFraction;
+            }
+
+            if (minFraction < 1f)
+            {
+                AdvanceBodyToTOI(body, minFraction);
+
+                // Refresh AABBs for the advanced position so the next step's
+                // broadphase / narrowphase sees the correct bounds.
+                for (int f = 0; f < body.Fixtures.Count; ++f)
+                {
+                    Fixture fixture = body.Fixtures[f];
+                    Aabb newAabb = ShapeGeometry.ComputeAabb(fixture.Shape, body.Transform);
+                    Vec2 oldCenter = fixture.Aabb.Center;
+                    Vec2 newCenter = newAabb.Center;
+                    _broadPhase.MoveProxy(fixture.ProxyId, newAabb, newCenter - oldCenter);
+                    fixture.Aabb = newAabb;
+                }
             }
         }
 

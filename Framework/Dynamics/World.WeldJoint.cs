@@ -30,9 +30,17 @@ namespace Box2DNG
             // (no bias in velocity solve, full-strength position correction).
             joint.LinearSpring = ResolveJointSpring(joint.LinearHertz, joint.LinearDampingRatio, dt);
             joint.AngularSpring = ResolveJointSpring(joint.AngularHertz, joint.AngularDampingRatio, dt);
-            // joint.DeltaCenter is set once at CreateJoint and stays put — it
-            // represents the rest-state world anchor delta. Re-capturing it
-            // here would erase accumulated drift.
+
+            // joint.DeltaCenter is captured ONCE at CreateJoint and stays
+            // fixed — the soft linear spring drives the current anchor delta
+            // back toward this reference. cpp box2d v3 re-captures deltaCenter
+            // each step at Init, but cpp also tracks `b2BodyState.deltaPosition`
+            // during the sub-step solve so the within-step drift signal
+            // (dcB - dcA) is visible at Solve time. Without deltaPosition
+            // tracking in our port, the step-start reference would yield a
+            // zero error signal (bodies haven't moved at Solve time, only
+            // between sub-steps), making the spring inert. We keep creation
+            // reference until Phase 2.5 adds deltaPosition tracking.
         }
 
         internal void SolveWeldJointVelocityConstraints(int index, float dt)

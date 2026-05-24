@@ -20,5 +20,9 @@ namespace Box2DNG
         public float Gamma;
         public float Bias;
         public Vec2 U;
+        // Resolved per-step spring tuning (Phase 1). Mirrors the Weld/Revolute
+        // pattern so the world's JointHertz default can take effect when this
+        // joint's FrequencyHz is 0.
+        public Softness Softness;
     }
 }

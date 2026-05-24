@@ -24,6 +24,12 @@ namespace Box2DNG
 
         public DistanceJointDef WithLength(float length) { Length = length; return this; }
         public DistanceJointDef WithFrequency(float hz) { FrequencyHz = hz; return this; }
+        public DistanceJointDef WithFrequency(float hz, float dampingRatio)
+        {
+            FrequencyHz = hz;
+            DampingRatio = dampingRatio;
+            return this;
+        }
         public DistanceJointDef WithDampingRatio(float ratio) { DampingRatio = ratio; return this; }
         public DistanceJointDef WithCollideConnected(bool collideConnected = true) { CollideConnected = collideConnected; return this; }
     }

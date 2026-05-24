@@ -35,7 +35,17 @@ namespace Box2DNG
             data.EnableLimit = def.EnableLimit;
             data.LowerAngle = def.LowerAngle;
             data.UpperAngle = def.UpperAngle;
-            
+            data.LinearHertz = def.LinearHertz;
+            data.LinearDampingRatio = def.LinearDampingRatio;
+
+            // Rest-state world anchor delta captured once at creation. The soft
+            // linear spring drives the current anchor delta back toward this
+            // value; recapturing each step would erase the drift we want to
+            // correct.
+            Vec2 worldAnchorA = Transform.Mul(def.BodyA.Transform, def.LocalAnchorA);
+            Vec2 worldAnchorB = Transform.Mul(def.BodyB.Transform, def.LocalAnchorB);
+            data.DeltaCenter = worldAnchorB - worldAnchorA;
+
             // Reset state
             data.Impulse = Vec2.Zero;
             data.MotorImpulse = 0f;
@@ -144,6 +154,12 @@ namespace Box2DNG
                 joint.MotorMass = 1.0f / joint.MotorMass;
             }
 
+            // Soft point-to-point spring. Falls through to the world default
+            // when LinearHertz==0; if that's also 0 the spring is Zero and the
+            // legacy rigid path runs (no bias in velocity solve, full-strength
+            // position correction).
+            joint.LinearSpring = ResolveJointSpring(joint.LinearHertz, joint.LinearDampingRatio, dt);
+
             if (!joint.EnableLimit)
             {
                 joint.LimitImpulse = 0.0f;
@@ -242,13 +258,30 @@ namespace Box2DNG
                 wB += iB * impulse;
             }
 
-            // Solve Point-to-Point
+            // Solve Point-to-Point with optional soft-spring bias. Rigid path
+            // (LinearSpring.IsZero) is mathematically identical to the legacy
+            // -Solve22(K, Cdot) formulation: massScale=1, impulseScale=0,
+            // bias=0, so impulse = -1 * Solve22(K, Cdot + 0) - 0 = -Solve22(K, Cdot).
             {
                 Vec2 vpA = vA + Vec2.Cross(wA, rA);
                 Vec2 vpB = vB + Vec2.Cross(wB, rB);
                 Vec2 Cdot = vpB - vpA;
 
-                Vec2 impulse = Solve22(joint.Mass, -Cdot);
+                Vec2 linearBias = Vec2.Zero;
+                float linearMassScale = 1f;
+                float linearImpulseScale = 0f;
+                if (!joint.LinearSpring.IsZero)
+                {
+                    Vec2 currentDelta = (_bodyPositions[indexB] + rB) - (_bodyPositions[indexA] + rA);
+                    Vec2 C = currentDelta - joint.DeltaCenter;
+                    linearBias = joint.LinearSpring.BiasRate * C;
+                    linearMassScale = joint.LinearSpring.MassScale;
+                    linearImpulseScale = joint.LinearSpring.ImpulseScale;
+                }
+                Vec2 b = Solve22(joint.Mass, Cdot + linearBias);
+                Vec2 impulse = new Vec2(
+                    -linearMassScale * b.X - linearImpulseScale * joint.Impulse.X,
+                    -linearMassScale * b.Y - linearImpulseScale * joint.Impulse.Y);
                 joint.Impulse += impulse;
 
                 vA -= mA * impulse;
@@ -310,18 +343,20 @@ namespace Box2DNG
                 qB = new Rot(aB);
             }
 
-            // Solve point constraint
+            // Solve point constraint. Skipped when the linear spring is active —
+            // bias already folded the position correction into the velocity solve.
+            if (joint.LinearSpring.IsZero)
             {
                 Vec2 rA = Rot.Mul(qA, joint.LocalAnchorA - _bodyLocalCenters[indexA]);
                 Vec2 rB = Rot.Mul(qB, joint.LocalAnchorB - _bodyLocalCenters[indexB]);
-                
+
                 Vec2 C = (cB + rB) - (cA + rA);
-                
+
                 float k11 = mA + mB + iA * rA.Y * rA.Y + iB * rB.Y * rB.Y;
                 float k12 = -iA * rA.X * rA.Y - iB * rB.X * rB.Y;
                 float k22 = mA + mB + iA * rA.X * rA.X + iB * rB.X * rB.X;
                 Mat22 K = new Mat22(new Vec2(k11, k12), new Vec2(k12, k22));
-                
+
                 Vec2 impulse = Solve22(K, -C);
 
                 cA -= mA * impulse;

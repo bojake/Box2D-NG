@@ -38,11 +38,42 @@ namespace Box2DNG
                     _world.BuildIslands(awakeOnly: _world._def.EnableSleep);
                 }
                 _world.BuildConstraintGraph();
+
+                // Phase 2 of TIER4_PARITY_PLAN: split the outer timestep into N
+                // mini-steps. Each sub-step uses h = timeStep / N. cpp box2d v3
+                // exposes the same control via `b2World_Step(..., subStepCount)`.
+                //
+                // Pipeline order preserved from pre-Phase-2 (so N=1 is
+                // byte-identical):
+                //   integrate velocities (full dt)            — ONCE
+                //   prepare contacts + joints + warm-start    — ONCE (h)
+                //   for sub in 1..N:
+                //     iterate velocity solve
+                //     (on final sub-step only) restitution + store impulses
+                //     integrate positions (h)
+                //     iterate position solve (rigid axes only)
+                //
+                // Restitution + StoreImpulses run on the LAST sub-step before
+                // its position integration so velocities reflect the bounce
+                // before bodies advance — matches the legacy single-step order.
+                // For multi-sub-step the intermediate sub-steps use the warm-
+                // started impulses without re-applying restitution; the final
+                // sub-step closes out impulse accounting.
+                int subStepCount = Math.Max(1, _world._def.SubStepCount);
+                float h = timeStep / subStepCount;
                 IntegrateVelocities(timeStep);
-                SolveVelocityConstraints(timeStep, dtRatio);
+                PrepareConstraints(h, dtRatio);
+                for (int sub = 0; sub < subStepCount; ++sub)
+                {
+                    SolveVelocityConstraints(h);
+                    if (sub == subStepCount - 1)
+                    {
+                        FinalizeContactSolver();
+                    }
+                    IntegratePositions(h);
+                    SolvePositionConstraints(h);
+                }
                 _world.RaiseContactImpulseEvents();
-                IntegratePositions(timeStep);
-                SolvePositionConstraints(timeStep);
                 _world.SyncSweeps();
                 FinalizeStep(timeStep);
                 _world.SplitAwakeIslandsIfNeeded();
@@ -111,19 +142,24 @@ namespace Box2DNG
                 }
             }
 
-            private void SolveVelocityConstraints(float timeStep, float dtRatio)
+            /// <summary>
+            /// Prepare contacts + joints + warm-start. Runs ONCE per outer step
+            /// before the sub-step loop. Re-running warm-start in each sub-step
+            /// would re-apply the accumulated impulse N times, blowing up the
+            /// solver.
+            /// </summary>
+            private bool _useSimd;
+            private void PrepareConstraints(float h, float dtRatio)
             {
-                World.ContactSolverStats aggregateStats = new World.ContactSolverStats();
-                bool useSimd = _world._def.EnableContactSolverSimd && System.Numerics.Vector.IsHardwareAccelerated;
-
-                if (useSimd)
+                _useSimd = _world._def.EnableContactSolverSimd && System.Numerics.Vector.IsHardwareAccelerated;
+                if (_useSimd)
                 {
-                    _world._contactSolverSimd.Prepare(timeStep, dtRatio, _world._constraintGraph);
+                    _world._contactSolverSimd.Prepare(h, dtRatio, _world._constraintGraph);
                     _world._contactSolverSimd.WarmStart();
                 }
                 else
                 {
-                    _world._contactSolver.Prepare(timeStep, dtRatio, _world._constraintGraph);
+                    _world._contactSolver.Prepare(h, dtRatio, _world._constraintGraph);
                     _world._contactSolver.WarmStart();
                 }
 
@@ -132,14 +168,21 @@ namespace Box2DNG
                     System.Collections.Generic.List<JointHandle> joints = _world._constraintGraph.Colors[colorIndex].Joints;
                     for (int i = 0; i < joints.Count; ++i)
                     {
-                        JointHandle handle = joints[i];
-                        InitJointVelocityConstraints(handle, timeStep);
+                        InitJointVelocityConstraints(joints[i], h);
                     }
                 }
+            }
 
+            /// <summary>
+            /// Iterate the velocity constraints for one sub-step. Each call runs
+            /// the configured number of velocity iterations over the existing
+            /// (pre-prepared) constraint state.
+            /// </summary>
+            private void SolveVelocityConstraints(float h)
+            {
                 for (int iter = 0; iter < _world._def.VelocityIterations; ++iter)
                 {
-                    if (useSimd)
+                    if (_useSimd)
                     {
                         _world._contactSolverSimd.SolveVelocity(useBias: true);
                     }
@@ -153,13 +196,21 @@ namespace Box2DNG
                         System.Collections.Generic.List<JointHandle> joints = _world._constraintGraph.Colors[colorIndex].Joints;
                         for (int i = 0; i < joints.Count; ++i)
                         {
-                            JointHandle handle = joints[i];
-                            SolveJointVelocityConstraints(handle, timeStep);
+                            SolveJointVelocityConstraints(joints[i], h);
                         }
                     }
                 }
+            }
 
-                if (useSimd)
+            /// <summary>
+            /// Restitution pass + impulse storage. Runs ONCE per outer step
+            /// after the sub-step loop so that contact impulse events reflect
+            /// the final post-sub-step state.
+            /// </summary>
+            private void FinalizeContactSolver()
+            {
+                World.ContactSolverStats aggregateStats;
+                if (_useSimd)
                 {
                     _world._contactSolverSimd.ApplyRestitution(_world._def.RestitutionThreshold);
                     _world._contactSolverSimd.StoreImpulses();
@@ -171,7 +222,6 @@ namespace Box2DNG
                     _world._contactSolver.StoreImpulses();
                     aggregateStats = _world._contactSolver.GetStats();
                 }
-
                 _world._lastContactSolverStats = aggregateStats;
             }
 

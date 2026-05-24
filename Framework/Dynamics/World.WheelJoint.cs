@@ -30,8 +30,11 @@ namespace Box2DNG
 
             float kAxis = mA + mB + iA * a1 * a1 + iB * a2 * a2;
             joint.SpringMass = kAxis > 0f ? 1f / kAxis : 0f;
-            joint.SpringSoftness = Softness.Make(joint.FrequencyHz, joint.DampingRatio, dt);
-            if (joint.FrequencyHz <= 0f)
+            // Per-joint FrequencyHz wins; if zero, fall through to the world's
+            // JointHertz default (matches the Phase 1 pattern from Weld and
+            // Revolute). When neither is set, the axial spring stays inactive.
+            joint.SpringSoftness = ResolveJointSpring(joint.FrequencyHz, joint.DampingRatio, dt);
+            if (joint.SpringSoftness.IsZero)
             {
                 joint.SpringImpulse = 0f;
             }
@@ -94,7 +97,9 @@ namespace Box2DNG
                 wB += iB * applied;
             }
 
-            if (joint.FrequencyHz > 0f)
+            // Gate on the resolved softness rather than the raw FrequencyHz so
+            // the world's JointHertz default participates.
+            if (!joint.SpringSoftness.IsZero)
             {
                 float translation = Vec2.Dot(axis, d);
                 float CdotAxis = Vec2.Dot(axis, vB + Vec2.Cross(wB, rB) - vA - Vec2.Cross(wA, rA));

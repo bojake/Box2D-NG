@@ -161,13 +161,19 @@ namespace Box2DNG
                 joint.UpperImpulse = 0f;
             }
             
-            joint.SpringSoftness = Softness.Make(joint.FrequencyHz, joint.DampingRatio, dt);
+            // Per-joint spring tuning. FrequencyHz drives the axial spring;
+            // EnableSpring toggles it (per-joint behaviour preserved). Falls
+            // through to the world default for unified Phase 1 behaviour.
+            joint.SpringSoftness = ResolveJointSpring(joint.FrequencyHz, joint.DampingRatio, dt);
             if (!joint.EnableSpring) joint.SpringImpulse = 0f;
-            
-            joint.ConstraintSoftness = Softness.Make(joint.ConstraintHertz, joint.ConstraintDampingRatio, dt);
-            if (joint.ConstraintHertz <= 0f)
+
+            // Orthogonal point + angular constraint softness. cpp's b2_constraintSoftness
+            // pattern: per-joint wins, else world default; else legacy rigid behaviour
+            // (Softness.Rigid keeps massScale=1, impulseScale=0).
+            joint.ConstraintSoftness = ResolveJointSpring(joint.ConstraintHertz, joint.ConstraintDampingRatio, dt);
+            if (joint.ConstraintSoftness.IsZero)
             {
-                joint.ConstraintSoftness = new Softness(0f, 1f, 0f);
+                joint.ConstraintSoftness = Softness.Rigid;
             }
 
             float axialImpulse = joint.SpringImpulse + joint.MotorImpulse + joint.LowerImpulse - joint.UpperImpulse;

@@ -41,15 +41,26 @@ namespace Box2DNG
             
             joint.Mass = invMass > 0f ? 1f / invMass : 0f;
 
-            if (joint.FrequencyHz > 0f)
+            // Resolve the spring per the unified Phase 1 pattern. Per-joint
+            // FrequencyHz wins; if zero, fall through to the world's JointHertz
+            // default. The legacy inline math (gamma = dt·mass·ω·a1, etc.) is
+            // algebraically identical to b2MakeSoft, so storing the resolved
+            // Softness and using it here keeps Distance's behaviour bit-for-bit
+            // identical when FrequencyHz > 0, and now also picks up the world
+            // default when FrequencyHz == 0.
+            joint.Softness = ResolveJointSpring(joint.FrequencyHz, joint.DampingRatio, dt);
+            if (!joint.Softness.IsZero)
             {
                 float C = length - joint.Length;
-                float omega = 2f * MathF.PI * joint.FrequencyHz;
-                float dmp = 2f * joint.Mass * joint.DampingRatio * omega;
-                float k = joint.Mass * omega * omega;
-                joint.Gamma = dt * (dmp + dt * k);
-                joint.Gamma = joint.Gamma != 0f ? 1f / joint.Gamma : 0f;
-                joint.Bias = C * dt * k * joint.Gamma;
+                // effective mass = mass / (1 + 1/(mass*a2)) = mass·massScale·a3/(massScale·a3+...)
+                // Equivalently: gamma = impulseScale/(mass·massScale).
+                // Substituting back into the legacy impulse formula gives the
+                // same result as cpp's `impulse = -massScale·mass·(Cdot + biasRate·C)
+                // - impulseScale·accImpulse`. We preserve the legacy form.
+                joint.Gamma = joint.Softness.MassScale != 0f
+                    ? joint.Softness.ImpulseScale / (joint.Mass * joint.Softness.MassScale)
+                    : 0f;
+                joint.Bias = joint.Softness.BiasRate * C;
                 joint.Mass = 1f / (invMass + joint.Gamma);
             }
             else
@@ -114,7 +125,10 @@ namespace Box2DNG
         internal void SolveDistanceJointPositionConstraints(int index)
         {
             ref DistanceJointData joint = ref _distanceJointsData[index];
-            if (joint.FrequencyHz > 0f)
+            // Skip the NGS position pass when the spring is active — bias already
+            // folded position correction into the velocity solve. Gated on the
+            // resolved Softness so the world's JointHertz default participates.
+            if (!joint.Softness.IsZero)
             {
                 return;
             }
