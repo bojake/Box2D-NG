@@ -5667,8 +5667,6 @@ namespace Box2DNG
             }
 
             float timeStep = _prevTimeStep;
-            int subSteps = _def.MaxSubSteps;
-
             if (timeStep <= 0f)
             {
                 return;
@@ -5694,7 +5692,7 @@ namespace Box2DNG
                 }
 
                 processed.Add(MakeProxyPairKey(contact.FixtureA.ProxyId, contact.FixtureB.ProxyId));
-                ProcessTOI(contact, timeStep, subSteps);
+                ProcessTOI(contact, timeStep);
             }
 
             for (int i = 0; i < _bodies.Count; ++i)
@@ -5799,7 +5797,7 @@ namespace Box2DNG
                         processed.Add(key);
                         Contact temp = new Contact(fixture, otherFixture);
                         temp.Update(fixture.Body.Transform, otherFixture.Body.Transform);
-                        ProcessTOI(temp, timeStep, subSteps);
+                        ProcessTOI(temp, timeStep);
                         return 1f;
                     }, input);
                 }
@@ -5822,7 +5820,7 @@ namespace Box2DNG
             body.SetTransformFromSweep(sweep);
         }
 
-        private void ProcessTOI(Contact contact, float timeStep, int subSteps)
+        private void ProcessTOI(Contact contact, float timeStep)
         {
             Body? bodyA = contact.FixtureA?.Body;
             Body? bodyB = contact.FixtureB?.Body;
@@ -5864,6 +5862,7 @@ namespace Box2DNG
             {
                 return;
             }
+
 
             float toi;
             if (contact.HasToi)
@@ -5908,6 +5907,7 @@ namespace Box2DNG
                 return;
             }
 
+            int subSteps = _def.MaxSubSteps;
             float remaining = timeStep * (1f - toi);
             if (remaining <= 0f)
             {
@@ -5927,11 +5927,8 @@ namespace Box2DNG
                 }
 
                 // Each sub-step is a fresh integrate-and-solve over a short dt.
-                // Carrying the previous sub-step's cached impulse into warm-start
-                // would re-apply it every iteration — bodies get flung away by
-                // N * normalImpulse * invMass over N sub-steps. Zero the cached
-                // impulses so the velocity-iteration loop drives vn -> 0 cleanly
-                // within this sub-step.
+                // Zero cached impulses so the velocity-iteration loop drives
+                // vn -> 0 cleanly within this sub-step without inheriting state.
                 for (int p = 0; p < contact.Manifold.PointCount; ++p)
                 {
                     ManifoldPoint mp = contact.Manifold.Points[p];
@@ -5950,6 +5947,38 @@ namespace Box2DNG
             }
 
             contact.IncrementToiCount();
+        }
+
+        private void IntegrateForTOI(Body body, float dt)
+        {
+            if (body.Type == BodyType.Static)
+            {
+                return;
+            }
+
+            Vec2 oldCenter = body.GetWorldCenter();
+            float oldAngle = body.Transform.Q.Angle;
+
+            if (body.Type == BodyType.Dynamic)
+            {
+                Vec2 accel = body.GravityScale * Gravity;
+                if (body.InverseMass > 0f)
+                {
+                    accel += body.InverseMass * body.Force;
+                }
+                body.LinearVelocity += dt * accel;
+                if (body.InverseInertia > 0f)
+                {
+                    body.AngularVelocity += dt * body.InverseInertia * body.Torque;
+                }
+                body.LinearVelocity = ApplyLinearDamping(body.LinearVelocity, body.LinearDamping, dt);
+                body.AngularVelocity = ApplyAngularDamping(body.AngularVelocity, body.AngularDamping, dt);
+            }
+
+            Vec2 newCenter = oldCenter + dt * body.LinearVelocity;
+            float newAngle = oldAngle + dt * body.AngularVelocity;
+            body.SetTransformFromCenter(newCenter, newAngle);
+            body.Sweep = new Sweep(body.LocalCenter, oldCenter, newCenter, oldAngle, newAngle, 0f);
         }
 
         private static ShapeProxy BuildWorldProxy(Shape shape, Transform transform)
@@ -5993,38 +6022,6 @@ namespace Box2DNG
                 }
             }
             return null;
-        }
-
-        private void IntegrateForTOI(Body body, float dt)
-        {
-            if (body.Type == BodyType.Static)
-            {
-                return;
-            }
-
-            Vec2 oldCenter = body.GetWorldCenter();
-            float oldAngle = body.Transform.Q.Angle;
-
-            if (body.Type == BodyType.Dynamic)
-            {
-                Vec2 accel = body.GravityScale * Gravity;
-                if (body.InverseMass > 0f)
-                {
-                    accel += body.InverseMass * body.Force;
-                }
-                body.LinearVelocity += dt * accel;
-                if (body.InverseInertia > 0f)
-                {
-                    body.AngularVelocity += dt * body.InverseInertia * body.Torque;
-                }
-                body.LinearVelocity = ApplyLinearDamping(body.LinearVelocity, body.LinearDamping, dt);
-                body.AngularVelocity = ApplyAngularDamping(body.AngularVelocity, body.AngularDamping, dt);
-            }
-
-            Vec2 newCenter = oldCenter + dt * body.LinearVelocity;
-            float newAngle = oldAngle + dt * body.AngularVelocity;
-            body.SetTransformFromCenter(newCenter, newAngle);
-            body.Sweep = new Sweep(body.LocalCenter, oldCenter, newCenter, oldAngle, newAngle, 0f);
         }
 
         private void PrepareContact(Contact contact, float timeStep, float dtRatio)

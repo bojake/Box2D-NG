@@ -11,6 +11,18 @@ namespace Box2DNG.Viewer.Samples
             Body ground = world.CreateBody(new BodyDef().AsStatic().At(0f, 0f));
             ground.CreateFixture(new FixtureDef(new SegmentShape(new Vec2(-40f, 0f), new Vec2(40f, 0f))));
 
+            // Welded chain bodies use linear/angular damping to suppress the
+            // residual oscillation introduced by per-contact TOI sub-stepping
+            // (which solves one contact at a time and so violates joint
+            // constraints when chains are coupled). Matches the cpp Cantilever
+            // sample which sets linear/angular damping ratios on its soft welds
+            // for the same reason; see box2d-cpp/samples/sample_joints.cpp.
+            BodyDef ChainBody(float x, float y) => new BodyDef()
+                .AsDynamic()
+                .At(x, y)
+                .WithLinearDamping(2f)
+                .WithAngularDamping(2f);
+
             {
                 PolygonShape shape = new PolygonShape(BuildBoxVertices(0.5f, 0.125f, Vec2.Zero, 0f));
                 FixtureDef fd = new FixtureDef(shape).WithDensity(20f);
@@ -18,13 +30,9 @@ namespace Box2DNG.Viewer.Samples
                 Body prevBody = ground;
                 for (int i = 0; i < Count; ++i)
                 {
-                    Body body = world.CreateBody(new BodyDef().AsDynamic().At(-14.5f + i, 5f));
+                    Body body = world.CreateBody(ChainBody(-14.5f + i, 5f));
                     body.CreateFixture(fd);
-
-                    Vec2 anchor = new Vec2(-15f + i, 5f);
-                    WeldJointDef jd = new WeldJointDef(prevBody, body, anchor);
-                    world.CreateJoint(jd);
-
+                    world.CreateJoint(new WeldJointDef(prevBody, body, new Vec2(-15f + i, 5f)));
                     prevBody = body;
                 }
             }
@@ -36,13 +44,9 @@ namespace Box2DNG.Viewer.Samples
                 Body prevBody = ground;
                 for (int i = 0; i < 3; ++i)
                 {
-                    Body body = world.CreateBody(new BodyDef().AsDynamic().At(-14f + 2f * i, 15f));
+                    Body body = world.CreateBody(ChainBody(-14f + 2f * i, 15f));
                     body.CreateFixture(fd);
-
-                    Vec2 anchor = new Vec2(-15f + 2f * i, 15f);
-                    WeldJointDef jd = new WeldJointDef(prevBody, body, anchor);
-                    world.CreateJoint(jd);
-
+                    world.CreateJoint(new WeldJointDef(prevBody, body, new Vec2(-15f + 2f * i, 15f)));
                     prevBody = body;
                 }
             }
@@ -54,14 +58,12 @@ namespace Box2DNG.Viewer.Samples
                 Body prevBody = ground;
                 for (int i = 0; i < Count; ++i)
                 {
-                    Body body = world.CreateBody(new BodyDef().AsDynamic().At(-4.5f + i, 5f));
+                    Body body = world.CreateBody(ChainBody(-4.5f + i, 5f));
                     body.CreateFixture(fd);
 
                     if (i > 0)
                     {
-                        Vec2 anchor = new Vec2(-5f + i, 5f);
-                        WeldJointDef jd = new WeldJointDef(prevBody, body, anchor);
-                        world.CreateJoint(jd);
+                        world.CreateJoint(new WeldJointDef(prevBody, body, new Vec2(-5f + i, 5f)));
                     }
 
                     prevBody = body;
@@ -75,14 +77,12 @@ namespace Box2DNG.Viewer.Samples
                 Body prevBody = ground;
                 for (int i = 0; i < Count; ++i)
                 {
-                    Body body = world.CreateBody(new BodyDef().AsDynamic().At(5.5f + i, 10f));
+                    Body body = world.CreateBody(ChainBody(5.5f + i, 10f));
                     body.CreateFixture(fd);
 
                     if (i > 0)
                     {
-                        Vec2 anchor = new Vec2(5f + i, 10f);
-                        WeldJointDef jd = new WeldJointDef(prevBody, body, anchor);
-                        world.CreateJoint(jd);
+                        world.CreateJoint(new WeldJointDef(prevBody, body, new Vec2(5f + i, 10f)));
                     }
 
                     prevBody = body;
