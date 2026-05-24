@@ -144,7 +144,7 @@ namespace Box2DNG.Tests
                 }
                 else if (contact.IsTouching && contact.SolverSetType == SolverSetType.Awake)
                 {
-                    Assert.Fail("Expected awake touching contact to be assigned a graph color.");
+                    Assert.Fail($"Expected awake touching contact to be assigned a graph color. bodyA={fixtureA.Body.Type}@{fixtureA.Body.Transform.P} bodyB={fixtureB.Body.Type}@{fixtureB.Body.Transform.P} pts={contact.Manifold.PointCount} edgeA={contact.EdgeIdA} edgeB={contact.EdgeIdB} setType={contact.SolverSetType}");
                 }
             }
         }

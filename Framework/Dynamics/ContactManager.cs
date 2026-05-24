@@ -108,9 +108,11 @@ namespace Box2DNG
                         ShapeProxyFactory.FromSegment(ShapeGeometry.ToSegment((SegmentShape)shapeB)), xfB);
                     break;
                 case ShapeType.ChainSegment:
-                    CollisionManifold.CollideDistance(manifold,
-                        ShapeProxyFactory.FromCapsule(capsuleA), xfA,
-                        ShapeProxyFactory.FromSegment(ShapeGeometry.ToChainSegment((ChainSegmentShape)shapeB).Segment), xfB);
+                    {
+                        Manifold temp = new Manifold();
+                        CollisionManifold.CollideChainSegmentAndCapsule(temp, ShapeGeometry.ToChainSegment((ChainSegmentShape)shapeB), xfB, capsuleA, xfA);
+                        CopyManifold(manifold, temp, ManifoldType.FaceB);
+                    }
                     break;
                 default:
                     CollisionManifold.CollideDistance(manifold,

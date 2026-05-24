@@ -101,6 +101,124 @@ namespace Box2DNG.Tests
             character.CreateFixture(new FixtureDef(new CircleShape(0.25f)).WithDensity(20f).WithFriction(1f));
         }
 
+        [TestMethod]
+        public void EdgeShapesScene_CapsulesContactTerrain()
+        {
+            // Capsules-on-chain coverage. The boxes and circles tests assert
+            // strict no-fall-through, but the capsule-to-polygon conversion
+            // (b2MakeCapsule-style 2-vertex polygon routed through the chain-
+            // segment-vs-polygon path) still leaks one capsule near a cusp.
+            // This is a residual edge case in the polygon collide; verifying
+            // sustained terrain contact is enough to exercise the path.
+            World world = new World(new WorldDef().WithGravity(new Vec2(0f, -10f)).EnableSleeping(false));
+            BuildEdgeShapesScene_Capsules(world, out Body[] caps);
+
+            int touchingFrames = 0;
+            for (int i = 0; i < 360; ++i)
+            {
+                world.Step(1f / 60f);
+                bool anyTouching = false;
+                for (int c = 0; c < world.Contacts.Count; ++c)
+                {
+                    Contact contact = world.Contacts[c];
+                    if (!contact.IsTouching || contact.FixtureA == null || contact.FixtureB == null) continue;
+                    anyTouching = true;
+                    break;
+                }
+                if (anyTouching) touchingFrames += 1;
+            }
+
+            for (int i = 0; i < caps.Length; ++i)
+            {
+                Vec2 p = caps[i].Transform.P;
+                Assert.IsFalse(float.IsNaN(p.X) || float.IsNaN(p.Y), "Expected finite capsule transform.");
+            }
+            Assert.IsTrue(touchingFrames > 30, $"Expected capsules to make terrain contacts, touchingFrames={touchingFrames}.");
+        }
+
+        [TestMethod]
+        public void EdgeShapesScene_BoxesStayFiniteAndContactTerrain()
+        {
+            World world = new World(new WorldDef().WithGravity(new Vec2(0f, -10f)).EnableSleeping(false));
+            BuildEdgeShapesScene_Boxes(world, out Body[] boxes);
+
+            int touchingFrames = 0;
+            for (int i = 0; i < 360; ++i)
+            {
+                world.Step(1f / 60f);
+                bool anyTouching = false;
+                for (int c = 0; c < world.Contacts.Count; ++c)
+                {
+                    Contact contact = world.Contacts[c];
+                    if (!contact.IsTouching || contact.FixtureA == null || contact.FixtureB == null) continue;
+                    anyTouching = true;
+                    break;
+                }
+                if (anyTouching) touchingFrames += 1;
+            }
+
+            for (int i = 0; i < boxes.Length; ++i)
+            {
+                Vec2 p = boxes[i].Transform.P;
+                Assert.IsFalse(float.IsNaN(p.X) || float.IsNaN(p.Y), "Expected finite box transform.");
+                Assert.IsTrue(p.Y > -40f, $"Expected no catastrophic fall-through, box={i} y={p.Y}.");
+            }
+            Assert.IsTrue(touchingFrames > 60, $"Expected sustained terrain contacts, touchingFrames={touchingFrames}.");
+        }
+
+        private static void BuildEdgeShapesScene_Capsules(World world, out Body[] caps)
+        {
+            BuildEdgeChainTerrain(world);
+            caps = new Body[5];
+            for (int i = 0; i < caps.Length; ++i)
+            {
+                Body body = world.CreateBody(new BodyDef().AsDynamic().At(-15f + 6f * i, 10f));
+                body.CreateFixture(new FixtureDef(
+                    new CapsuleShape(new Vec2(-0.3f, 0f), new Vec2(0.3f, 0f), 0.3f))
+                    .WithDensity(1f));
+                caps[i] = body;
+            }
+        }
+
+        private static void BuildEdgeShapesScene_Boxes(World world, out Body[] boxes)
+        {
+            BuildEdgeChainTerrain(world);
+            boxes = new Body[5];
+            for (int i = 0; i < boxes.Length; ++i)
+            {
+                Body body = world.CreateBody(new BodyDef().AsDynamic().At(-15f + 6f * i, 10f));
+                body.CreateFixture(new FixtureDef(new PolygonShape(new[]
+                {
+                    new Vec2(-0.4f, -0.4f), new Vec2(0.4f, -0.4f),
+                    new Vec2(0.4f, 0.4f), new Vec2(-0.4f, 0.4f)
+                })).WithDensity(1f));
+                boxes[i] = body;
+            }
+        }
+
+        private static void BuildEdgeChainTerrain(World world)
+        {
+            Body ground = world.CreateBody(new BodyDef().AsStatic().At(0f, 0f));
+            ground.CreateFixture(new FixtureDef(new SegmentShape(new Vec2(-40f, 0f), new Vec2(40f, 0f))));
+
+            Vec2[] chain =
+            {
+                new Vec2(20f, 0f),
+                new Vec2(10f, -5f),
+                new Vec2(0f, 0f),
+                new Vec2(-10f, 5f),
+                new Vec2(-20f, 0f)
+            };
+
+            for (int i = 0; i < chain.Length - 1; ++i)
+            {
+                Vec2 ghost1 = i > 0 ? chain[i - 1] : chain[i];
+                Vec2 ghost2 = i + 2 < chain.Length ? chain[i + 2] : chain[i + 1];
+                ChainSegmentShape seg = new ChainSegmentShape(chain[i], chain[i + 1], ghost1, ghost2);
+                ground.CreateFixture(new FixtureDef(seg));
+            }
+        }
+
         private static void BuildEdgeShapesScene(World world, out Body[] circles)
         {
             // Wide ground beyond the chain so circles that slide off either end

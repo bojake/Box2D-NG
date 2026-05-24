@@ -2438,10 +2438,8 @@ namespace Box2DNG
                 {
                     contact.ColorIndex = -1;
                     contact.LocalIndex = -1;
-                    contact.LocalIndex = -1;
                     continue;
                 }
-
                 AddContactToConstraintGraph(contact);
             }
 
@@ -2692,8 +2690,15 @@ namespace Box2DNG
                 listB.Add(contact);
             }
 
+            // A new contact may need to merge two previously-disjoint islands. The
+            // dirty-island optimisation in BuildIslands only knows about bodies in
+            // _lastIslands, so it can miss the new connectivity. Clear the per-
+            // island dirty index so BuildIslands falls back to BuildAllIslands.
+            _dirtyIslandIds.Clear();
             MarkIslandDirty(bodyA);
             MarkIslandDirty(bodyB);
+            _dirtyIslandIds.Clear();
+            _islandsDirty = true;
         }
 
         private void UnlinkContact(Contact contact)
@@ -4330,6 +4335,37 @@ namespace Box2DNG
                 ProcessSensorPairs();
             }
 
+            // Reconcile linked state with IsTouching. SolveTOI's contact.Update
+            // can transition IsTouching silently, bypassing the transitions
+            // pipeline above. If we don't relink here, the contact won't be
+            // discovered by BuildIslandAdjacency (_bodyContacts[body] stays
+            // empty), and BuildConstraintGraph won't colour the contact.
+            foreach (var kv in _contactMap)
+            {
+                Contact c = kv.Value;
+                if (c.FixtureA == null || c.FixtureB == null)
+                {
+                    continue;
+                }
+                if (c.FixtureA.IsSensor || c.FixtureB.IsSensor)
+                {
+                    continue;
+                }
+                bool isLinked = c.EdgeIdA >= 0 && c.EdgeIdB >= 0;
+                if (c.IsTouching && !isLinked)
+                {
+                    LinkContact(c);
+                    contactsChanged = true;
+                }
+                else if (!c.IsTouching && isLinked)
+                {
+                    UnlinkContact(c);
+                    c.ColorIndex = -1;
+                    c.LocalIndex = -1;
+                    contactsChanged = true;
+                }
+            }
+
             if (contactsChanged)
             {
                 _islandsDirty = true;
@@ -5784,6 +5820,54 @@ namespace Box2DNG
 
             Sweep sweep = body.Sweep.Advance(alpha);
             body.SetTransformFromSweep(sweep);
+        }
+
+        // SolveTOI's contact.Update calls mutate contact state (IsTouching, Manifold)
+        // after BuildConstraintGraph has already run. Any contact that transitions
+        // through TOI ends up with stale graph metadata (ColorIndex = -1, not linked).
+        // Reconcile by linking/colouring touching contacts that fell through and
+        // unlinking any that stopped touching.
+        private void ReconcileGraphAfterTOI()
+        {
+            foreach (var kv in _contactMap)
+            {
+                Contact c = kv.Value;
+                if (c.FixtureA == null || c.FixtureB == null)
+                {
+                    continue;
+                }
+                if (c.FixtureA.IsSensor || c.FixtureB.IsSensor)
+                {
+                    continue;
+                }
+
+                bool isLinked = c.EdgeIdA >= 0 && c.EdgeIdB >= 0;
+                if (c.IsTouching)
+                {
+                    if (!isLinked)
+                    {
+                        LinkContact(c);
+                    }
+                    if (c.SolverSetType == SolverSetType.Awake && c.ColorIndex < 0 &&
+                        c.FixtureA.Body.Type != BodyType.Static && c.FixtureB.Body.Type != BodyType.Static)
+                    {
+                        if (!_awakeSet.Contacts.Contains(c))
+                        {
+                            _awakeSet.Contacts.Add(c);
+                        }
+                        if (c.Manifold.PointCount > 0)
+                        {
+                            AddContactToConstraintGraph(c);
+                        }
+                    }
+                }
+                else if (isLinked)
+                {
+                    UnlinkContact(c);
+                    c.ColorIndex = -1;
+                    c.LocalIndex = -1;
+                }
+            }
         }
 
         private void ProcessTOI(Contact contact, float timeStep, int subSteps)

@@ -297,7 +297,9 @@ namespace Box2DNG
                     float inv = 1.0f / (d23_1 + d23_2);
                     V[1].A = d23_1 * inv;
                     V[2].A = d23_2 * inv;
-                    V[0] = V[1];
+                    // cpp at distance.c:406 does `s->v1 = s->v3` — copies w3
+                    // into the first slot, leaving the simplex as {w3, w2}.
+                    V[0] = V[2];
                     Count = 2;
                     return;
                 }

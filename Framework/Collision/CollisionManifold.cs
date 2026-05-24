@@ -394,22 +394,463 @@ namespace Box2DNG
 
         public static void CollideChainSegmentAndCapsule(Manifold manifold, ChainSegment chainA, Transform xfA, Capsule capsuleB, Transform xfB)
         {
-            ShapeProxy proxyA = ShapeProxyFactory.FromSegment(chainA.Segment);
-            ShapeProxy proxyB = ShapeProxyFactory.FromCapsule(capsuleB);
-            if (!TryBuildDistanceManifoldOneSided(manifold, chainA, xfA, proxyA, proxyB, xfB))
-            {
-                manifold.PointCount = 0;
-            }
+            // Mirror box2d-cpp/src/manifold.c:1180 — treat the capsule as a 2-vertex
+            // polygon and run the chain-segment-vs-polygon path so we get the
+            // Gauss-map ghost handling.
+            Polygon polyB = MakeCapsulePolygon(capsuleB.Center1, capsuleB.Center2, capsuleB.Radius);
+            CollideChainSegmentAndPolygon(manifold, chainA, xfA, polyB, xfB);
         }
 
         public static void CollideChainSegmentAndPolygon(Manifold manifold, ChainSegment chainA, Transform xfA, Polygon polygonB, Transform xfB)
         {
-            ShapeProxy proxyA = ShapeProxyFactory.FromSegment(chainA.Segment);
-            ShapeProxy proxyB = ShapeProxyFactory.FromPolygon(polygonB);
-            if (!TryBuildDistanceManifoldOneSided(manifold, chainA, xfA, proxyA, proxyB, xfB))
+            // Port of b2CollideChainSegmentAndPolygon from box2d-cpp/src/manifold.c:1319.
+            // Operates in segment-A-local frame throughout, then writes a FaceA-style
+            // manifold whose LocalNormal and LocalPoint stay in A's local frame
+            // (the C# convention; cpp rotates these to world).
+            manifold.PointCount = 0;
+
+            // xf = xfA^-1 * xfB — applied below to bring polygon B into A's local frame.
+            Rot xfQ = Rot.MulT(xfA.Q, xfB.Q);
+            Vec2 xfP = Rot.MulT(xfA.Q, xfB.P - xfA.P);
+            Transform xf = new Transform(xfP, xfQ);
+
+            Vec2 centroidB = Transform.Mul(xf, polygonB.Centroid);
+            float radiusB = polygonB.Radius;
+
+            Vec2 p1 = chainA.Segment.Point1;
+            Vec2 p2 = chainA.Segment.Point2;
+
+            Vec2 edge1Raw = p2 - p1;
+            if (edge1Raw.LengthSquared <= Constants.Epsilon * Constants.Epsilon)
             {
-                manifold.PointCount = 0;
+                return;
             }
+            Vec2 edge1 = edge1Raw.Normalize();
+
+            ChainSegmentParams smoothParams;
+            smoothParams.Edge1 = edge1;
+
+            const float convexTol = 0.01f;
+            Vec2 edge0Raw = p1 - chainA.Ghost1;
+            Vec2 edge0 = edge0Raw.LengthSquared > Constants.Epsilon * Constants.Epsilon ? edge0Raw.Normalize() : edge1;
+            smoothParams.Normal0 = MathFng.RightPerp(edge0);
+            smoothParams.Convex1 = Vec2.Cross(edge0, edge1) >= convexTol;
+
+            Vec2 edge2Raw = chainA.Ghost2 - p2;
+            Vec2 edge2 = edge2Raw.LengthSquared > Constants.Epsilon * Constants.Epsilon ? edge2Raw.Normalize() : edge1;
+            smoothParams.Normal2 = MathFng.RightPerp(edge2);
+            smoothParams.Convex2 = Vec2.Cross(edge1, edge2) >= convexTol;
+
+            Vec2 normal1 = MathFng.RightPerp(edge1);
+            bool behind1 = Vec2.Dot(normal1, centroidB - p1) < 0f;
+            bool behind0 = true;
+            bool behind2 = true;
+            if (smoothParams.Convex1)
+            {
+                behind0 = Vec2.Dot(smoothParams.Normal0, centroidB - p1) < 0f;
+            }
+            if (smoothParams.Convex2)
+            {
+                behind2 = Vec2.Dot(smoothParams.Normal2, centroidB - p2) < 0f;
+            }
+            if (behind1 && behind0 && behind2)
+            {
+                // One-sided rejection: polygon centroid is fully behind the chain.
+                return;
+            }
+
+            // Bring polygon B into A's local frame.
+            int count = polygonB.Count;
+            Vec2[] vertices = new Vec2[count];
+            Vec2[] normals = new Vec2[count];
+            for (int i = 0; i < count; ++i)
+            {
+                vertices[i] = Transform.Mul(xf, polygonB.Vertices[i]);
+                normals[i] = Rot.Mul(xf.Q, polygonB.Normals[i]);
+            }
+
+            // Distance call against the bare segment endpoints (partial-polygon GJK
+            // doesn't work correctly).
+            Vec2[] segPoints = new[] { p1, p2 };
+            ShapeProxy proxyA = new ShapeProxy(segPoints, 2, 0f);
+            ShapeProxy proxyB = new ShapeProxy(vertices, count, 0f);
+            DistanceInput input = new DistanceInput(proxyA, proxyB, Transform.Identity, Transform.Identity, false);
+            SimplexCache cache = new SimplexCache(0f, 0, 0, 0, 0, 0, 0, 0);
+            DistanceOutput output = Distance.Compute(input, ref cache);
+
+            float speculativeDistance = 0.5f * Constants.LinearSlop;
+            if (output.Distance > radiusB + speculativeDistance)
+            {
+                return;
+            }
+
+            Vec2 n0 = smoothParams.Convex1 ? smoothParams.Normal0 : normal1;
+            Vec2 n2 = smoothParams.Convex2 ? smoothParams.Normal2 : normal1;
+
+            int incidentIndex = -1;
+            int incidentNormal = -1;
+
+            if (!behind1 && output.Distance > 0.1f * Constants.LinearSlop)
+            {
+                // Closest features are vertex-vertex or vertex-edge.
+                if (cache.Count == 1)
+                {
+                    Vec2 pA = output.PointA;
+                    Vec2 pB = output.PointB;
+                    Vec2 diff = pB - pA;
+                    Vec2 normal = diff.LengthSquared > Constants.Epsilon * Constants.Epsilon
+                        ? diff.Normalize()
+                        : normal1;
+
+                    ChainNormalType type = ClassifyChainNormal(in smoothParams, normal);
+                    if (type == ChainNormalType.Skip)
+                    {
+                        return;
+                    }
+                    if (type == ChainNormalType.Admit)
+                    {
+                        manifold.Type = ManifoldType.FaceA;
+                        manifold.LocalNormal = normal;
+                        manifold.LocalPoint = pA;
+                        manifold.Points[0] = new ManifoldPoint(
+                            Transform.MulT(xfB, Transform.Mul(xfA, pB)),
+                            0f, 0f,
+                            new ContactFeature((byte)cache.IndexA0, (byte)cache.IndexB0, 0, 0));
+                        manifold.PointCount = 1;
+                        return;
+                    }
+                    // Snap: fall through to segment-normal path.
+                    incidentIndex = cache.IndexB0;
+                }
+                else
+                {
+                    // cache.Count == 2: vertex-edge case.
+                    int ia1 = cache.IndexA0;
+                    int ia2 = cache.IndexA1;
+                    int ib1 = cache.IndexB0;
+                    int ib2 = cache.IndexB1;
+
+                    if (ia1 == ia2)
+                    {
+                        // Single vertex on A, edge on B. Pick the polygon normal
+                        // that best aligns with the contact direction.
+                        Vec2 normalB = output.PointA - output.PointB;
+                        float dot1 = Vec2.Dot(normalB, normals[ib1]);
+                        float dot2 = Vec2.Dot(normalB, normals[ib2]);
+                        int ib = dot1 > dot2 ? ib1 : ib2;
+                        normalB = normals[ib];
+
+                        ChainNormalType type = ClassifyChainNormal(in smoothParams, -normalB);
+                        if (type == ChainNormalType.Skip)
+                        {
+                            return;
+                        }
+                        if (type == ChainNormalType.Admit)
+                        {
+                            ib1 = ib;
+                            ib2 = ib < count - 1 ? ib + 1 : 0;
+                            Vec2 b1v = vertices[ib1];
+                            Vec2 b2v = vertices[ib2];
+
+                            // Pick incident segment vertex.
+                            dot1 = Vec2.Dot(normalB, p1 - b1v);
+                            dot2 = Vec2.Dot(normalB, p2 - b1v);
+                            if (dot1 < dot2)
+                            {
+                                if (Vec2.Dot(n0, normalB) < Vec2.Dot(normal1, normalB)) return;
+                            }
+                            else
+                            {
+                                if (Vec2.Dot(n2, normalB) < Vec2.Dot(normal1, normalB)) return;
+                            }
+
+                            if (TryClipSegments(b1v, b2v, p1, p2, normalB, radiusB, 0f, out Vec2 a0, out Vec2 a1Pt, out float s0, out float s1))
+                            {
+                                manifold.Type = ManifoldType.FaceA;
+                                manifold.LocalNormal = -normalB;
+                                manifold.LocalPoint = 0.5f * (a0 + a1Pt);
+                                manifold.Points[0] = new ManifoldPoint(
+                                    Transform.MulT(xfB, Transform.Mul(xfA, a0)),
+                                    0f, 0f,
+                                    new ContactFeature((byte)ib1, 1, 0, 0));
+                                manifold.Points[1] = new ManifoldPoint(
+                                    Transform.MulT(xfB, Transform.Mul(xfA, a1Pt)),
+                                    0f, 0f,
+                                    new ContactFeature((byte)ib2, 0, 0, 0));
+                                manifold.PointCount = 2;
+                            }
+                            return;
+                        }
+                        // Snap.
+                        incidentNormal = ib;
+                    }
+                    else
+                    {
+                        // Edge on A, vertex on B — pick the one farther from segment plane.
+                        float dot1 = Vec2.Dot(normal1, vertices[ib1] - p1);
+                        float dot2 = Vec2.Dot(normal1, vertices[ib2] - p2);
+                        incidentIndex = dot1 < dot2 ? ib1 : ib2;
+                    }
+                }
+            }
+            else
+            {
+                // SAT along the segment normal and ghost normals.
+                float edgeSeparation = float.MaxValue;
+                for (int i = 0; i < count; ++i)
+                {
+                    float s = Vec2.Dot(normal1, vertices[i] - p1);
+                    if (s < edgeSeparation)
+                    {
+                        edgeSeparation = s;
+                        incidentIndex = i;
+                    }
+                }
+
+                if (smoothParams.Convex1)
+                {
+                    float s0Sep = float.MaxValue;
+                    for (int i = 0; i < count; ++i)
+                    {
+                        float s = Vec2.Dot(smoothParams.Normal0, vertices[i] - p1);
+                        if (s < s0Sep) s0Sep = s;
+                    }
+                    if (s0Sep > edgeSeparation)
+                    {
+                        edgeSeparation = s0Sep;
+                        incidentIndex = -1;
+                    }
+                }
+                if (smoothParams.Convex2)
+                {
+                    float s2Sep = float.MaxValue;
+                    for (int i = 0; i < count; ++i)
+                    {
+                        float s = Vec2.Dot(smoothParams.Normal2, vertices[i] - p2);
+                        if (s < s2Sep) s2Sep = s;
+                    }
+                    if (s2Sep > edgeSeparation)
+                    {
+                        edgeSeparation = s2Sep;
+                        incidentIndex = -1;
+                    }
+                }
+
+                // SAT polygon normals (admit only).
+                float polygonSeparation = -float.MaxValue;
+                int referenceIndex = -1;
+                for (int i = 0; i < count; ++i)
+                {
+                    Vec2 n = normals[i];
+                    if (ClassifyChainNormal(in smoothParams, -n) != ChainNormalType.Admit) continue;
+                    Vec2 pv = vertices[i];
+                    float s = MathF.Min(Vec2.Dot(n, p2 - pv), Vec2.Dot(n, p1 - pv));
+                    if (s > polygonSeparation)
+                    {
+                        polygonSeparation = s;
+                        referenceIndex = i;
+                    }
+                }
+
+                if (polygonSeparation > edgeSeparation)
+                {
+                    int ia1 = referenceIndex;
+                    int ia2 = ia1 < count - 1 ? ia1 + 1 : 0;
+                    Vec2 a1 = vertices[ia1];
+                    Vec2 a2 = vertices[ia2];
+                    Vec2 n = normals[ia1];
+
+                    float dot1 = Vec2.Dot(n, p1 - a1);
+                    float dot2 = Vec2.Dot(n, p2 - a1);
+                    if (dot1 < dot2)
+                    {
+                        if (Vec2.Dot(n0, n) < Vec2.Dot(normal1, n)) return;
+                    }
+                    else
+                    {
+                        if (Vec2.Dot(n2, n) < Vec2.Dot(normal1, n)) return;
+                    }
+
+                    if (TryClipSegments(a1, a2, p1, p2, n, radiusB, 0f, out Vec2 ap0, out Vec2 ap1, out float _, out float _))
+                    {
+                        manifold.Type = ManifoldType.FaceA;
+                        manifold.LocalNormal = -n;
+                        manifold.LocalPoint = 0.5f * (ap0 + ap1);
+                        manifold.Points[0] = new ManifoldPoint(
+                            Transform.MulT(xfB, Transform.Mul(xfA, ap0)),
+                            0f, 0f,
+                            new ContactFeature((byte)ia1, 1, 0, 0));
+                        manifold.Points[1] = new ManifoldPoint(
+                            Transform.MulT(xfB, Transform.Mul(xfA, ap1)),
+                            0f, 0f,
+                            new ContactFeature((byte)ia2, 0, 0, 0));
+                        manifold.PointCount = 2;
+                    }
+                    return;
+                }
+
+                if (incidentIndex == -1)
+                {
+                    // Ghost edge owns the separating axis.
+                    return;
+                }
+                // Fall through to segment-normal axis.
+            }
+
+            // Segment normal axis: clip the polygon edge incident to `incidentIndex`
+            // against the chain segment.
+            int ib1f, ib2f;
+            Vec2 b1f, b2f;
+            if (incidentNormal != -1)
+            {
+                ib1f = incidentNormal;
+                ib2f = ib1f < count - 1 ? ib1f + 1 : 0;
+            }
+            else
+            {
+                int i2 = incidentIndex;
+                int i1 = i2 > 0 ? i2 - 1 : count - 1;
+                float d1 = Vec2.Dot(normal1, normals[i1]);
+                float d2 = Vec2.Dot(normal1, normals[i2]);
+                if (d1 < d2)
+                {
+                    ib1f = i1; ib2f = i2;
+                }
+                else
+                {
+                    ib1f = i2; ib2f = i2 < count - 1 ? i2 + 1 : 0;
+                }
+            }
+            b1f = vertices[ib1f];
+            b2f = vertices[ib2f];
+
+            if (TryClipSegments(p1, p2, b1f, b2f, normal1, 0f, radiusB, out Vec2 cp0, out Vec2 cp1, out float _, out float _))
+            {
+                manifold.Type = ManifoldType.FaceA;
+                manifold.LocalNormal = normal1;
+                manifold.LocalPoint = 0.5f * (cp0 + cp1);
+                manifold.Points[0] = new ManifoldPoint(
+                    Transform.MulT(xfB, Transform.Mul(xfA, cp0)),
+                    0f, 0f,
+                    new ContactFeature(0, (byte)ib2f, 0, 0));
+                manifold.Points[1] = new ManifoldPoint(
+                    Transform.MulT(xfB, Transform.Mul(xfA, cp1)),
+                    0f, 0f,
+                    new ContactFeature(1, (byte)ib1f, 0, 0));
+                manifold.PointCount = 2;
+            }
+        }
+
+        // Clip segment [a1, a2] against segment [b1, b2] along the given normal.
+        // Returns the two contact points in A-local frame and their separations.
+        // Mirror of b2ClipSegments in box2d-cpp/src/manifold.c:1184.
+        private static bool TryClipSegments(Vec2 a1, Vec2 a2, Vec2 b1, Vec2 b2, Vec2 normal, float ra, float rb,
+            out Vec2 outLower, out Vec2 outUpper, out float sepLower, out float sepUpper)
+        {
+            outLower = Vec2.Zero;
+            outUpper = Vec2.Zero;
+            sepLower = 0f;
+            sepUpper = 0f;
+
+            Vec2 tangent = MathFng.LeftPerp(normal);
+
+            float lower1 = 0f;
+            float upper1 = Vec2.Dot(a2 - a1, tangent);
+            float upper2 = Vec2.Dot(b1 - a1, tangent);
+            float lower2 = Vec2.Dot(b2 - a1, tangent);
+
+            if (upper2 < lower1 || upper1 < lower2)
+            {
+                return false;
+            }
+
+            Vec2 vLower;
+            float denom = upper2 - lower2;
+            if (lower2 < lower1 && denom > Constants.Epsilon)
+            {
+                float t = (lower1 - lower2) / denom;
+                vLower = b2 + t * (b1 - b2);
+            }
+            else
+            {
+                vLower = b2;
+            }
+
+            Vec2 vUpper;
+            if (upper2 > upper1 && denom > Constants.Epsilon)
+            {
+                float t = (upper1 - lower2) / denom;
+                vUpper = b2 + t * (b1 - b2);
+            }
+            else
+            {
+                vUpper = b1;
+            }
+
+            sepLower = Vec2.Dot(vLower - a1, normal);
+            sepUpper = Vec2.Dot(vUpper - a1, normal);
+
+            // Place contact points at midpoint accounting for radii.
+            vLower = vLower + 0.5f * (ra - rb - sepLower) * normal;
+            vUpper = vUpper + 0.5f * (ra - rb - sepUpper) * normal;
+
+            outLower = vLower;
+            outUpper = vUpper;
+            return true;
+        }
+
+        private struct ChainSegmentParams
+        {
+            public Vec2 Edge1;
+            public Vec2 Normal0;
+            public Vec2 Normal2;
+            public bool Convex1;
+            public bool Convex2;
+        }
+
+        private enum ChainNormalType
+        {
+            Skip,
+            Admit,
+            Snap
+        }
+
+        // Gauss-map classifier — mirror of b2ClassifyNormal in box2d-cpp/src/manifold.c:1279.
+        private static ChainNormalType ClassifyChainNormal(in ChainSegmentParams p, Vec2 normal)
+        {
+            const float sinTol = 0.01f;
+            if (Vec2.Dot(normal, p.Edge1) <= 0f)
+            {
+                // Tail-side
+                if (p.Convex1)
+                {
+                    if (Vec2.Cross(normal, p.Normal0) > sinTol) return ChainNormalType.Skip;
+                    return ChainNormalType.Admit;
+                }
+                return ChainNormalType.Snap;
+            }
+            else
+            {
+                // Head-side
+                if (p.Convex2)
+                {
+                    if (Vec2.Cross(p.Normal2, normal) > sinTol) return ChainNormalType.Skip;
+                    return ChainNormalType.Admit;
+                }
+                return ChainNormalType.Snap;
+            }
+        }
+
+        // Build a 2-vertex capsule polygon — matches b2MakeCapsule in cpp.
+        private static Polygon MakeCapsulePolygon(Vec2 p1, Vec2 p2, float radius)
+        {
+            Vec2 d = p2 - p1;
+            Vec2 axis = d.LengthSquared > Constants.Epsilon * Constants.Epsilon ? d.Normalize() : new Vec2(1f, 0f);
+            Vec2 normal = MathFng.RightPerp(axis);
+            Vec2[] verts = new[] { p1, p2 };
+            Vec2[] norms = new[] { normal, -normal };
+            Vec2 centroid = 0.5f * (p1 + p2);
+            return new Polygon(verts, norms, centroid, radius, 2);
         }
 
         public static bool CollideDistance(Manifold manifold, ShapeProxy proxyA, Transform xfA, ShapeProxy proxyB, Transform xfB)
