@@ -31,29 +31,31 @@ namespace Box2DNG
             joint.LinearSpring = ResolveJointSpring(joint.LinearHertz, joint.LinearDampingRatio, dt);
             joint.AngularSpring = ResolveJointSpring(joint.AngularHertz, joint.AngularDampingRatio, dt);
 
-            // joint.DeltaCenter behavior — flag-gated (Phase 2.5 Stage L).
+            // joint.DeltaCenter stays at the creation-time anchor offset
+            // in BOTH flag modes (Phase 2.5 Stage L *reverted* after
+            // empirical evidence — see BASELINE.md "cause #1").
             //
-            //   Flag off (UseDeltaPositionTracking=false): DeltaCenter is
-            //   captured ONCE at CreateJoint and stays fixed; the soft
-            //   linear spring drives the current anchor delta back toward
-            //   this *creation-time* reference (the existing behaviour;
-            //   byte-identical to pre-Stage-L).
+            // The original Phase 2.5 plan called for re-capturing
+            // DeltaCenter at each Init when `UseDeltaPositionTracking` is
+            // on, mirroring cpp box2d v3's "deltaCenter captured fresh at
+            // Prepare each step" semantic. The intent: under the delta-
+            // position model the bias signal becomes `C = (effective
+            // anchor delta) - (step-start anchor delta) = within-step
+            // anchor drift`, which is the within-step bias cpp v3 builds
+            // on.
             //
-            //   Flag on: re-capture DeltaCenter each step at Init to the
-            //   *step-start* anchor offset (`_bodyPositions[id]` is the
-            //   step-start pose at this point — ResetSweeps just snapshotted
-            //   it and IntegratePositions hasn't run yet for this Step).
-            //   Within the sub-step loop the velocity-constraint bias then
-            //   sees `C = (effective_anchor_B - effective_anchor_A) -
-            //   DeltaCenter = delta_B - delta_A`, i.e., the within-step
-            //   drift signal cpp v3 builds on. The flag-on weld joint
-            //   resists within-step motion but allows accumulated cross-
-            //   step drift, matching cpp v3's "the spring fights this
-            //   step, not the simulation history" semantic.
-            if (_def.UseDeltaPositionTracking)
-            {
-                joint.DeltaCenter = (_bodyPositions[indexB] + joint.RB) - (_bodyPositions[indexA] + joint.RA);
-            }
+            // In practice that *broke* Cantilever (flag-on lateV
+            // 1.49 → 16.52, fellThrough 0 → 2) without delivering any
+            // win elsewhere. The flag-on plumbing alone (`_bodyPositions`
+            // stays at step-start in the sub-step loop, delta arrays
+            // accumulate, `ApplyBodyDeltas` commits) is what unlocks the
+            // Phase 2.5 improvements on Pyramid / Dominos /
+            // CompoundShapes — re-anchoring DeltaCenter to step-start
+            // is orthogonal and only useful if the entire position-
+            // correction architecture also moves to cpp v3's bias-only
+            // model (we still keep the v2-style position-constraint NGS
+            // pass for rigid axes, so creation-anchored DeltaCenter is
+            // the right reference for our hybrid model).
         }
 
         internal void SolveWeldJointVelocityConstraints(int index, float dt)

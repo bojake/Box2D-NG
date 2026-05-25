@@ -187,16 +187,11 @@ namespace Box2DNG
                 joint.LimitImpulse = 0f;
             }
 
-            // Phase 2.5 Stage L — flag-gated DeltaCenter re-capture. See the
-            // matching block in InitWeldJointVelocityConstraints for the
-            // full rationale. Flag off keeps the creation-time reference;
-            // flag on re-captures step-start so the velocity-solve bias
-            // sees the within-step anchor drift (delta_B - delta_A) cpp v3
-            // builds on.
-            if (_def.UseDeltaPositionTracking)
-            {
-                joint.DeltaCenter = (_bodyPositions[indexB] + rB) - (_bodyPositions[indexA] + rA);
-            }
+            // Stage L reverted — see InitWeldJointVelocityConstraints for
+            // the rationale. DeltaCenter stays at creation-time anchor
+            // offset in both flag modes; the Phase 2.5 win comes from the
+            // plumbing (step-start arrays + delta accumulation), not from
+            // the step-start DeltaCenter re-capture.
         }
 
         internal void SolveRevoluteJointVelocityConstraints(int index, float dt)
