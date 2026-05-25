@@ -623,3 +623,88 @@ Other findings the fix surfaces:
 - Breakable's "regression" went from +0.06 (noise) to +0.83 (real) —
   worth noting but small. The on+bias path takes it back down to 0.60
   (Δ -0.74 vs on, still better than off+1.49).
+
+## Task #84: VaryingFriction tuning sensitivity diagnosed (2026-05-25)
+
+Probe at `Tests/VaryingFrictionExplosionProbe.cs`. Scene is 5 unit-cube
+boxes with frictions (0.75, 0.5, 0.35, 0.1, 0.0) falling onto a flat
+horizontal segment ground — no slope, no joints, no restitution.
+
+### Finding 1: explosions are not under-damping
+
+The damping-ratio sweep at Hz=30 (bias-only) shows the explosions are
+chaotic, not monotonic in damping:
+
+```
+ratio │ box0(μ=.75)  box1(μ=.5)  box2(μ=.35)  box3(μ=.1)  box4(μ=0) │ maxV
+  0.5 │    0.72         0.73         0.73         0.73       0.72   │   0.73   (stable)
+  1.0 │   75.38        75.53         0.10         0.10       0.61   │  75.53   EXPLODES
+  2.0 │    0.48         0.47         0.47         0.47       0.47   │   0.48   (stable)
+  3.0 │    0.22         0.48         0.48         0.22       0.48   │   0.48   (stable)
+  5.0 │   59.87         0.10        76.93        59.87       0.10   │  76.93   EXPLODES (different boxes!)
+  7.5 │    0.05        85.12         0.06         0.11       0.11   │  85.12   EXPLODES (box1 only!)
+ 10.0 │    0.13         0.05         0.05         0.26       0.06   │   0.26   (stable)
+```
+
+ratio=0.5 (severely under-damped) is stable; ratio=1.0 (critically
+damped) explodes; ratio=2.0/3.0 stable; ratio=5.0/7.5 explode again.
+This rules out a simple "under-damping pumps energy through friction
+cap" hypothesis. The phenomenon is resonance between the soft-spring
+settling period and the box-rocking period in the asymmetric contact
+manifold (box has 2 corner contacts on a flat ground; small rotation
+lifts one corner; friction direction at the remaining corner flips).
+
+### Finding 2: which boxes explode depends on the tuning
+
+At H30r1, only the two highest-friction boxes (μ=0.75, μ=0.5) explode
+— the lower-friction boxes (μ=0.35, 0.1, 0.0) settle better than they
+do at our current default H120r1. Higher friction couples MORE
+strongly to the rocking-resonance, but the dependency is non-monotonic
+across (Hz, ratio): ratio=5 explodes boxes 0, 2, 3 (not 1!).
+
+### Finding 3: NGS backstop fully rescues the explosion
+
+Running H30r1 with `UseDeltaPositionTracking=true` but **without**
+`UseBiasOnlyContacts` (so the v2-NGS pass is still active):
+
+```
+Late-window peak: bias-only=75.53  NGS-backstop=4.03
+
+step  bias-only per-box v               NGS per-box v
+ 200  8.9  9.0  0.1  0.0  0.6          1.1  0.1  0.2  0.6  0.6
+ 400  42.2 42.4  0.0  0.1  0.6         0.1  0.3  0.1  0.4  0.6
+ 599  75.4 75.5  0.1  0.0  0.6         1.1  0.5  0.3  0.6  0.6
+```
+
+**The NGS pass is doing real corrective work that the soft-spring bias
+cannot replicate at intermediate tunings.** This is an important
+architectural data point for the eventual flag flip — it means
+bias-only is NOT a universal replacement for NGS; it's an equivalent
+*at properly-tuned settings* but loses its safety net at others.
+
+### Conclusion: documented limitation, not a code bug
+
+The bias-only path has resonant (Hz, ratio) regions where rocking-
+asymmetric contact manifolds + friction coupling produce energy growth
+without an NGS backstop. Two safe corners exist in the (Hz, ratio)
+space:
+
+- **H120r1 (our current default)** — works because Hz is high enough
+  that the resonance period is below scene timescales
+- **H30r10 (cpp v3 default)** — works because damping is critical
+  (no spring oscillation to resonate)
+
+Intermediate values can hit resonance. Recommendation: only use those
+two safe corners with bias-only mode. Users wanting to tune Hz/ratio
+between them should either keep NGS active (don't flip
+`UseBiasOnlyContacts` on) or stay close to the safe corners.
+
+### Future architectural option (out of scope for today)
+
+A potential cause-#7 fix would be a *contingent* NGS pass: only trigger
+the position-constraint NGS when soft-bias correction over the
+velocity-solve iterations fails to reduce penetration below a threshold.
+That would keep cpp v3's bias-only speed on most contacts but engage
+the NGS safety net when soft-spring tuning hits resonance. Not pursued
+now — current safe corners are adequate and the architecture would
+need careful design.
