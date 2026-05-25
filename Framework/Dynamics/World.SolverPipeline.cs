@@ -300,6 +300,13 @@ namespace Box2DNG
                         //     step-start data until they are migrated to add
                         //     the delta (Stages C+) — flag-on tests must
                         //     avoid those code paths until then.
+                        // Snapshot Sweep BEFORE the SetTransform call below —
+                        // `Body.SetTransform` clobbers Sweep to (newCenter,
+                        // newCenter) as part of its public-API contract, so
+                        // reading `body.Sweep` after it would lose the outer-
+                        // step-start C0 set by `ResetSweeps`.
+                        Sweep sweepBefore = body.Sweep;
+
                         int bodyId = body.Id;
                         if (_world._def.UseDeltaPositionTracking)
                         {
@@ -311,7 +318,20 @@ namespace Box2DNG
                             body.SetTransform(newPosition, newRot);
                         }
 
-                        body.Sweep = new Sweep(body.LocalCenter, oldCenter, newCenter, oldAngle, newAngle, 0f);
+                        // Sweep MUST span the full outer step for CCD (`SolveTOI*`)
+                        // to detect tunneling correctly. Pre-2026-05-25 the assignment
+                        // was `new Sweep(LocalCenter, oldCenter, newCenter, ...)`,
+                        // which overwrote C0/A0 each sub-step — after N>1 sub-steps,
+                        // the Sweep only spanned the LAST sub-step, and a bullet that
+                        // tunneled in sub-step 3 was invisible to the post-loop
+                        // per-body CCD. Now we preserve C0/A0 (set by `ResetSweeps`
+                        // at the top of each outer Step, zero-length at body's
+                        // outer-step-start pose) and only update C/A so Sweep stays
+                        // a single segment from outer-step-start to current sub-step
+                        // end. SolveTOI / IsFastBody / SolveContinuousBody all read
+                        // `Sweep.C - Sweep.C0` and now see the full outer-step
+                        // trajectory.
+                        body.Sweep = new Sweep(body.LocalCenter, sweepBefore.C0, newCenter, sweepBefore.A0, newAngle, sweepBefore.Alpha0);
                     }
                 }
             }

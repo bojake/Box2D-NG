@@ -69,8 +69,12 @@ namespace Box2DNG.Tests
         public void SoftWeld_HighHertz_BehavesNearRigid()
         {
             // At very high Hertz the soft spring asymptotically matches rigid:
-            // anchor velocities should be near-equal after one step.
-            World world = new World(new WorldDef().WithGravity(Vec2.Zero));
+            // anchor velocities should be near-equal after one step. Pin
+            // SubStepCount=1 — this is a spring-physics test, not an
+            // integration-model test; with cpp v3's N=4 the spring is iterated
+            // 4× per outer step which amplifies oscillation in the high-Hz
+            // limit and diverges this assertion's expected behaviour.
+            World world = new World(new WorldDef().WithSubStepCount(1).WithGravity(Vec2.Zero));
             Body a = world.CreateBody(new BodyDef().AsDynamic().At(-1f, 0f));
             a.CreateFixture(new FixtureDef(new CircleShape(0.5f)).WithDensity(1f));
             Body b = world.CreateBody(new BodyDef().AsDynamic().At(1f, 0f));
@@ -95,8 +99,9 @@ namespace Box2DNG.Tests
             // A hanging body welded to a fixed anchor with a damped spring
             // should settle to rest under gravity within a few seconds. Without
             // damping it would oscillate indefinitely; with critical damping
-            // (ratio=1) it converges fastest.
-            World world = new World(new WorldDef().WithGravity(new Vec2(0f, -10f)));
+            // (ratio=1) it converges fastest. Pin SubStepCount=1 — spring-
+            // physics test, not integration-model test.
+            World world = new World(new WorldDef().WithSubStepCount(1).WithGravity(new Vec2(0f, -10f)));
             Body anchor = world.CreateBody(new BodyDef().AsStatic().At(0f, 5f));
             Body hanging = world.CreateBody(new BodyDef().AsDynamic().At(0f, 5f));
             hanging.CreateFixture(new FixtureDef(new CircleShape(0.3f)).WithDensity(1f));
@@ -118,8 +123,9 @@ namespace Box2DNG.Tests
         public void SoftWeld_AngularSpring_DampsRotation()
         {
             // Two welded bodies with only an angular spring set. B starts
-            // spinning relative to A; the angular spring damps it out.
-            World world = new World(new WorldDef().WithGravity(Vec2.Zero));
+            // spinning relative to A; the angular spring damps it out. Pin
+            // SubStepCount=1 — spring-physics test, not integration-model.
+            World world = new World(new WorldDef().WithSubStepCount(1).WithGravity(Vec2.Zero));
             Body a = world.CreateBody(new BodyDef().AsStatic().At(-1f, 0f));
             Body b = world.CreateBody(new BodyDef().AsDynamic().At(1f, 0f));
             b.CreateFixture(new FixtureDef(new PolygonShape(new[]
@@ -144,7 +150,9 @@ namespace Box2DNG.Tests
         public void SoftWeld_WorldDefaultHertz_AppliedWhenJointHertzIsZero()
         {
             // Joint has no per-joint Hertz; world's JointHertz fallback applies.
+            // Pin SubStepCount=1 — JointHertz-fallback semantic test.
             World world = new World(new WorldDef()
+                .WithSubStepCount(1)
                 .WithGravity(Vec2.Zero)
                 .WithJointHertz(30f)
                 .WithJointDampingRatio(0.5f));

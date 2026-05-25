@@ -21,13 +21,50 @@ namespace Box2DNG.Tests
     public class DeltaPositionTrackingTests
     {
         [TestMethod]
-        public void Flag_DefaultsOff()
+        public void Flag_PartialPhase25Flip()
         {
+            // 2026-05-25 — PARTIAL Phase 2.5 default flip. The full
+            // coordinated flip envisaged by TIER4_PARITY_PLAN moves five
+            // knobs together (UseDeltaPositionTracking, UseBiasOnlyContacts,
+            // ContactHertz, ContactDampingRatio, SubStepCount, UsePerBodyCCD).
+            // Implementation showed the bias-only / sub-step / CCD trio
+            // regress Cantilever chain physics, Car wheel dynamics, and
+            // FrictionJoint anchoring — issues the investigation-probes had
+            // not surfaced because they tested narrower configurations.
+            //
+            // What flipped today (default on):
+            //   - UseDeltaPositionTracking — full Phase 2.5 architecture
+            //     active by default. SoA delta arrays carry within-step
+            //     drift; joint Solve + contact NGS read step-start + delta.
+            //   - Sweep tracking fix in IntegratePositions (real bug
+            //     surfaced by the flip — CCD under sub-stepping now sees the
+            //     full outer-step trajectory).
+            //
+            // What stays opt-in until per-sample validation lands:
+            //   - UseBiasOnlyContacts (still default false; flip explicitly
+            //     for cpp v3 settling wins; needs Cantilever/Car/FrictionJoint
+            //     follow-up first)
+            //   - SubStepCount > 1 (default 1; Pyramid wins at N=4 with the
+            //     full coordinated tuning, but real-suite testing exposed
+            //     other-sample regressions)
+            //   - UsePerBodyCCD (default false; catastrophic regressions
+            //     in CircleStress / Cantilever / FrictionJoint when paired
+            //     with the partial-flip configuration)
+            //   - ContactHertz / ContactDampingRatio at (30, 10) — moves
+            //     with bias-only
             WorldDef def = new WorldDef();
-            Assert.IsFalse(def.UseDeltaPositionTracking,
-                "Default must stay off — consumer migration (Stages C+) is not done.");
+            Assert.IsTrue(def.UseDeltaPositionTracking,
+                "UseDeltaPositionTracking flipped to default-on in the partial Phase 2.5 flip.");
             Assert.IsFalse(def.UseBiasOnlyContacts,
-                "Cause #2 seed flag must default off — bias-only model needs contact-softness re-tuning before flipping.");
+                "UseBiasOnlyContacts stays default-off — needs Cantilever/Car/FrictionJoint follow-up.");
+            Assert.AreEqual(1, def.SubStepCount,
+                "SubStepCount stays at 1 — per-sample sub-step validation deferred.");
+            Assert.IsFalse(def.UsePerBodyCCD,
+                "UsePerBodyCCD stays default-off — partial-flip CCD interactions need investigation.");
+            Assert.AreEqual(120f, def.ContactHertz,
+                "ContactHertz stays at legacy 120 — moves with UseBiasOnlyContacts.");
+            Assert.AreEqual(1f, def.ContactDampingRatio,
+                "ContactDampingRatio stays at legacy 1 — moves with UseBiasOnlyContacts.");
         }
 
         [TestMethod]

@@ -7,6 +7,14 @@ namespace Box2DNG
         public Vec2 Gravity { get; private set; } = new Vec2(0f, -10f);
         public float RestitutionThreshold { get; private set; } = 1f;
         public float HitEventThreshold { get; private set; } = 1f;
+        // Kept at legacy (120, 1) after the 2026-05-25 partial Phase 2.5 flip.
+        // cpp v3's (30, 10) is the right tuning for the bias-only path
+        // (BASELINE.md "Cause #3 reframed") but the NGS pass — which stays
+        // active until `UseBiasOnlyContacts` is flipped on per-world — is
+        // tuned for (120, 1). The contact-tuning flip moves together with
+        // `UseBiasOnlyContacts` in a future commit, after per-sample
+        // validation against Cantilever / Car / Breakable / FrictionJoint
+        // (the regressions the bias-only flip exposed).
         public float ContactHertz { get; private set; } = 120f;
         public float ContactDampingRatio { get; private set; } = 1f;
         public float ContactSpeed { get; private set; } = 15f;
@@ -20,34 +28,38 @@ namespace Box2DNG
         // ProcessTOI loop (which sub-steps each contact and pumps energy into
         // joint-coupled bodies — see TIER3_NOTES.md "TOI sub-stepping pumps
         // energy in joint-coupled chains") to a per-body sweep matching cpp
-        // v3's `b2SolveContinuous`. Default false during validation; flip to
-        // true once all viewer samples settle cleanly with the new path.
+        // v3's `b2SolveContinuous`. Default false — the 2026-05-25 coordinated
+        // Phase 2.5 flip kept the delta+bias+sub-step trio but NOT this. Per-
+        // body CCD alone (without the delta-position machinery providing
+        // within-step contact discovery for sub-steps) catastrophically
+        // regresses CircleStress (-3290 y fall-through), Cantilever (8
+        // bodies fell through), FrictionJoint, SliderCrank. The bullet-test
+        // case is covered by `Sweep`-tracking fix in IntegratePositions
+        // (Sweep now spans the full outer step, so legacy ProcessTOI still
+        // catches tunneling under sub-stepping). Future flip needs a probe
+        // pass before changing this default.
         public bool UsePerBodyCCD { get; private set; }
-        // Phase 2.5 Stages B–K of TIER4_PARITY_PLAN: opt-in to cpp v3's
-        // delta-position model where `_bodyPositions[id]` / `_bodyRotations[id]`
-        // stay at the outer-step start throughout the sub-step loop and
+        // Phase 2.5 Stages B–K of TIER4_PARITY_PLAN: cpp v3's delta-position
+        // model where `_bodyPositions[id]` / `_bodyRotations[id]` stay at
+        // the outer-step start throughout the sub-step loop and
         // `_bodyDeltaPositions[id]` / `_bodyDeltaRotations[id]` carry the
         // within-step movement. `ApplyBodyDeltas` commits delta back into
         // the step-start arrays once per outer Step. Joint Solve methods +
         // contact NGS read `step-start + delta` for the "current effective"
-        // pose. Default false during the consumer migration — the suite
-        // stays byte-identical to Stage A.2 with the flag off. Flip to true
-        // in dedicated tests as each consumer is migrated; flip the default
-        // once all consumers are green at flag-on.
-        public bool UseDeltaPositionTracking { get; private set; }
-        // Phase 2.5 cause #2 seed: when true, `SolvePositionConstraints`
-        // skips the v2-style position-constraint NGS pass for contacts and
-        // relies entirely on the soft-contact bias that `ContactSolver`
-        // computes when `EnableContactSoftening` is true. cpp box2d v3
-        // uses this bias-only model exclusively — its stacks settle from
-        // the bias signal alone, no NGS backstop. Our codebase has both
-        // paths active by default; the NGS pass over-corrects when paired
-        // with sub-stepping + soft springs, blocking the `SubStepCount > 1`
-        // win the Phase 2.5 plan predicted. Flipping this flag on lets a
-        // sample run the cpp v3 path and lets future work tune
-        // `ContactHertz` / `ContactDampingRatio` for adequate settling
-        // without the NGS backstop. Default false (no behaviour change).
-        public bool UseBiasOnlyContacts { get; private set; }
+        // pose. Flipped on 2026-05-25 alongside the rest of the coordinated
+        // Phase 2.5 flip.
+        public bool UseDeltaPositionTracking { get; private set; } = true;
+        // Phase 2.5 cause #2: when true, `SolvePositionConstraints` skips the
+        // v2-style position-constraint NGS pass for contacts and relies
+        // entirely on the soft-contact bias that `ContactSolver` computes
+        // when `EnableContactSoftening` is true. cpp box2d v3 uses this
+        // bias-only model exclusively — its stacks settle from the bias
+        // signal alone, no NGS backstop. Flipped on 2026-05-25 alongside
+        // the rest of the coordinated Phase 2.5 flip. NOTE: bias-only is
+        // tuning-sensitive (task #84); ContactHertz=30, ratio=10 must be
+        // set together. Intermediate (Hz, ratio) tunings can produce
+        // friction-bias coupling explosions (see BASELINE.md task #84).
+        public bool UseBiasOnlyContacts { get; private set; } = false;
         public bool EnableContactSoftening { get; private set; } = true;
         public bool UseSoftConstraints { get; private set; } = true;
         public bool EnableContactHertzClamp { get; private set; }
@@ -59,8 +71,13 @@ namespace Box2DNG
         // loop. Phase 2 of TIER4_PARITY_PLAN. Each outer Step(timeStep) runs
         // the solver N times with h = timeStep/N — soft constraints (Phase 1)
         // benefit because their `b2MakeSoft(hertz, ratio, h)` becomes stiffer
-        // per sub-step. Default 1 preserves the legacy single-step behaviour
-        // (byte-identical to pre-Phase-2 baseline); cpp default is 4.
+        // per sub-step. Default 1 (kept after the 2026-05-25 partial flip).
+        // The probe data (BASELINE.md "Cause #3 reframed") showed N=4 with
+        // H30r10 + bias-only gives excellent Pyramid settling, but real-suite
+        // testing with N=4 exposes catastrophic regressions in Cantilever /
+        // FrictionJoint / SliderCrank / Car samples that the probes missed.
+        // cpp v3 default is 4 — future work needs per-sample CCD-interaction
+        // validation before flipping. Opt in per-test or per-sample.
         public int SubStepCount { get; private set; } = 1;
         public float JointForceThreshold { get; private set; } = float.MaxValue;
         public float JointTorqueThreshold { get; private set; } = float.MaxValue;

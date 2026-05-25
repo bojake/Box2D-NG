@@ -805,3 +805,133 @@ positions, bias-only contacts, soft constraints) plus the original
 (H120r1) tuning interact badly — we can have one or the other, not
 both. The future commit that flips defaults must move all four
 parameters together; partial migrations break the suite.
+
+## Task #85: partial Phase 2.5 default flip (2026-05-25)
+
+Attempted the full coordinated flip — flipped all 5 defaults
+simultaneously (ContactHertz, ContactDampingRatio, UseDeltaPositionTracking,
+UseBiasOnlyContacts, SubStepCount, UsePerBodyCCD). Real-suite testing
+exposed regressions the investigation probes had missed:
+
+```
+Full-flip attempt (5 defaults moved) — 13 failures from 450 tests:
+- Cantilever (2 tests): 16 bodies fall through, late-peak 133→catastrophic
+- CircleStress: 8 bodies fall through to y=-3290 (per-body CCD breakage)
+- FrictionJoint: body fell to y=-365
+- SliderCrank, Car (3 tests): wheel/motor/friction dynamics broke
+- TranslationAndRotation_AreClamped: semantic change (per-sub-step now)
+- 4 SoftWeld tests: N=4 sub-stepping amplifies high-Hz spring oscillation
+- BulletDoesNotTunnelThroughWall: CCD missed (real bug in Sweep tracking)
+```
+
+Bisected the failures by reverting flips one at a time:
+- **`UsePerBodyCCD=true` was the catastrophe**: caused CircleStress
+  -3290y fall-through and Cantilever 8-body fall-through. The probe data
+  had never tested per-body CCD enabled (only delta+bias+sub-step). Per-
+  body CCD without the within-step contact discovery machinery still
+  needed cannot replace legacy ProcessTOI.
+- **`SubStepCount=4` was the next biggest**: amplifies soft-weld
+  oscillation and exposes joint-resonance scenes that work at N=1. Even
+  with cpp v3 tuning, real samples (Car wheel suspension at 12Hz,
+  Cantilever soft welds at 30Hz) hit resonance.
+- **`UseBiasOnlyContacts=true` regressed Cantilever rigid welds + Car**:
+  rigid chain configurations under gravity need NGS-pass backstop;
+  bias-only alone produces less stable settling. Same issue task #84
+  diagnosed in VaryingFriction.
+- **`ContactHertz=30, ContactDampingRatio=10`** alone broke Breakable
+  (softer contact spring → impulse threshold not reached for break event).
+  These values are correct for bias-only mode, wrong for the still-active
+  NGS pass.
+
+### Real bug discovered by the flip: Sweep tracking under sub-stepping
+
+`IntegratePositions` was overwriting `body.Sweep` each sub-step with
+`Sweep(LocalCenter, oldCenter, newCenter, ...)`. After N>1 sub-steps,
+the Sweep only spanned the LAST sub-step, not the outer step — so
+per-body CCD only saw the final 1/N of the body's trajectory and
+missed tunneling earlier in the step. **Fixed in this commit**: now
+preserves `Sweep.C0/A0/Alpha0` from the `ResetSweeps()` call at the
+top of the outer Step, and only updates `Sweep.C/A` each sub-step.
+`SolveTOI` / `IsFastBody` / `SolveContinuousBody` now see the full
+outer-step trajectory.
+
+(Implementation gotcha: `body.SetTransform` in the flag-off path
+clobbers Sweep to `(newCenter, newCenter)`, so the fix must snapshot
+`body.Sweep` BEFORE the SetTransform call and write it back AFTER.)
+
+### What landed (the partial flip)
+
+After reverting the 4 problematic defaults and fixing the Sweep bug:
+
+```csharp
+// 2026-05-25 partial Phase 2.5 flip:
+UseDeltaPositionTracking = true   // ← FLIPPED (Phase 2.5 architecture by default)
+
+// Reverted (need per-sample validation):
+ContactHertz             = 120    // legacy
+ContactDampingRatio      = 1      // legacy
+UseBiasOnlyContacts      = false  // bias-only deferred
+SubStepCount             = 1      // sub-stepping deferred
+UsePerBodyCCD            = false  // per-body CCD deferred
+```
+
+Plus the Sweep tracking bug fix (independent of flag state — improves
+CCD correctness whenever `SubStepCount > 1`).
+
+**Test suite: 450/450 passing.**
+
+Wins delivered by delta-tracking-by-default (from the task #83 corrected
+sample-by-sample probe, flag-on N=1 vs flag-off):
+
+```
+Pyramid           12.62 →  4.08   (Δ -8.54)
+Dominos           35.41 →  6.53   (Δ -28.88, FT 3→0)
+CompoundShapes    97.22 → 14.61   (Δ -82.61)
+Cantilever         1.49 →  1.41
+Chain              5.34 →  4.27
+CollisionFiltering 2.44 →  0.56
+SliderCrank       22.36 → 22.24
+```
+
+Wins still gated behind opt-in flags (the four reverted defaults):
+
+```
+TheoJansen        120.00 →  1.15  — needs UseBiasOnlyContacts + (H30,r10)
+EdgeShapes         80.61 → 37.91  — needs UseBiasOnlyContacts
+Pyramid at N=4     12.62 →  0.07  — needs SubStepCount=4 + (H30,r10) + bias-only
+```
+
+### Plan-level status after task #85
+
+- **Phase 0** ✅ done
+- **Phase 1** ✅ done (soft welds + 4 other joints, 5 left rigid intentionally)
+- **Phase 2** 🟡 API done, default still `SubStepCount=1`. The path forward
+  is "all 5 knobs flip together" — needs per-sample joint-tuning sweep
+  against Cantilever's soft-weld 30Hz spring + Car's WheelJoint 12Hz
+  suspension. Estimated as Phase 4's "~1 week of cleanup"; turned out
+  to need closer to 1-3 days per scene.
+- **Phase 2.5** ✅ delta-position architecture is now the default. All
+  consumer migrations from stages A-K still in place behind the flag,
+  now activated by default. Stage L (step-start DeltaCenter re-capture)
+  intentionally reverted per task #79.
+- **Phase 3** 🟡 API done, default still `UsePerBodyCCD=false`. The
+  full coordinated flip would activate it; bisect showed it needs the
+  delta-bias-substep trio to land safely first.
+- **Phase 4** 🟡 Cantilever migrated, TIER3_NOTES + SOLVER.md written.
+  Legacy `ProcessTOI` (~250 LOC) still in tree — can't delete until
+  `UsePerBodyCCD` default flips.
+
+### Next steps (for a future engineer)
+
+1. Per-sample validation pass for the four deferred defaults. Each
+   sample either:
+   - Works fine under the cpp v3 tuning → unblocks the flip
+   - Needs its own joint Hz/damping tuned → fix the sample
+   - Has a real physics bug → investigate
+2. Once all 35 samples are green at the cpp v3 tuning, flip the four
+   defaults together in a single commit. This is the "second half" of
+   task #85.
+3. Delete legacy `ProcessTOI` once `UsePerBodyCCD` default is flipped.
+4. Revisit Cantilever's stiffer-than-cpp 30Hz spring — under the full
+   flip it can drop to cpp's 15Hz.
+5. Performance comparison vs cpp box2d v3 on identical scenes.

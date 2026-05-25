@@ -151,7 +151,13 @@ namespace Box2DNG.Tests
         [TestMethod]
         public void TranslationAndRotation_AreClamped()
         {
+            // `MaximumTranslation` / `MaximumRotation` are PER SUB-STEP limits,
+            // matching cpp box2d v3. Under SubStepCount=4 a body can advance at
+            // most 4 × MaximumTranslation per outer Step. Force N=1 here so the
+            // assertion is exact — the clamp's per-sub-step semantics are
+            // covered by `Sub-step tunneling` checks elsewhere.
             World world = new World(new WorldDef()
+                .WithSubStepCount(1)
                 .WithGravity(new Vec2(0f, 0f))
                 .WithMaximumTranslation(0.5f)
                 .WithMaximumRotation(0.25f));
