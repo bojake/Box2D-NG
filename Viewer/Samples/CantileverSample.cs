@@ -11,22 +11,22 @@ namespace Box2DNG.Viewer.Samples
             Body ground = world.CreateBody(new BodyDef().AsStatic().At(0f, 0f));
             ground.CreateFixture(new FixtureDef(new SegmentShape(new Vec2(-40f, 0f), new Vec2(40f, 0f))));
 
-            // Phase 1 of TIER4_PARITY_PLAN added the soft-weld API
-            // (`WeldJointDef.WithLinearSpring` / `WithAngularSpring`) but the
-            // Cantilever scene's many chains don't yet stabilize on top of
-            // it — cpp's Cantilever uses subStepCount=4 (which we get in
-            // Phase 2) and per-joint constraint tuning. Until that lands, the
-            // chain bodies keep their body-level damping workaround. The
-            // sample-level switch to soft welds happens in Phase 2 once the
-            // sub-step solver is in place.
+            // Phase 4 of TIER4_PARITY_PLAN — "smallest valuable slice":
+            // soft welds replace the body-level damping workaround. cpp's
+            // Cantilever uses (15 Hz, 0.5 damping); our iterative solver
+            // (without Phase 2.5 deltaPosition tracking landed yet) needs
+            // a stiffer spring at (30 Hz, 0.5 damping) to keep the late-
+            // window peak under the threshold pinned by SampleSettlingTests.
+            // Once Phase 2.5 Stages B–K land we can revisit and drop back
+            // to cpp's exact tune.
             WeldJointDef ChainWeld(Body a, Body b, Vec2 anchor) =>
-                new WeldJointDef(a, b, anchor);
+                new WeldJointDef(a, b, anchor)
+                    .WithLinearSpring(30f, 0.5f)
+                    .WithAngularSpring(30f, 0.5f);
 
             BodyDef ChainBody(float x, float y) => new BodyDef()
                 .AsDynamic()
-                .At(x, y)
-                .WithLinearDamping(2f)
-                .WithAngularDamping(2f);
+                .At(x, y);
 
             {
                 PolygonShape shape = new PolygonShape(BuildBoxVertices(0.5f, 0.125f, Vec2.Zero, 0f));

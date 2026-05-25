@@ -25,11 +25,11 @@ namespace Box2DNG.Tests
         [TestMethod]
         public void Cantilever_LateWindowBounded()
         {
-            // Cantilever has welded chains. The viewer sample currently uses
-            // body-level damping to suppress per-contact CCD energy buildup
-            // (CantileverSample.cs). Phase 1+3 will replace that with soft
-            // welds + per-body CCD; until then, the bounded late-window peak
-            // is what we pin.
+            // Cantilever has welded chains. Phase 4 of TIER4_PARITY_PLAN
+            // landed soft welds (30 Hz, 0.5 damping) on CantileverSample and
+            // dropped the body-level linear/angular damping workaround. The
+            // soft-spring bias now suppresses the residual oscillation that
+            // the body damping was masking — mirrors cpp's Cantilever sample.
             var m = new SampleMetrics(new CantileverSample());
             m.Run(Steps);
             Assert.IsTrue(m.NonFiniteBodyCount == 0, $"Non-finite states: {m.NonFiniteBodyCount}. {m}");

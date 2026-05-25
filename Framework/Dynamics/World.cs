@@ -5195,9 +5195,9 @@ namespace Box2DNG
                 float angle = body.Transform.Q.Angle;
                 body.Sweep = new Sweep(body.LocalCenter, center, center, angle, angle, 0f);
                 _bodyAwakeAtStepStart[body.Id] = _bodyAwakes[body.Id];
-                // Phase 2.5 of TIER4_PARITY_PLAN: clear within-step delta at
-                // start of each outer Step. Sub-steps inside the Step loop
-                // accumulate into these arrays. Consumers (added in
+                // Phase 2.5 of TIER4_PARITY_PLAN — Stage A: clear within-step
+                // delta at start of each outer Step. Sub-steps inside the Step
+                // loop accumulate into these arrays. Consumers (added in
                 // subsequent stages) read `body.Position + delta` so they
                 // see the predicted post-integration anchor offset.
                 _bodyDeltaPositions[body.Id] = Vec2.Zero;
