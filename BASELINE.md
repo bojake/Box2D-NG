@@ -543,3 +543,83 @@ Pattern: under-damped soft springs (low Hz + low/medium damping ratio,
 or high Hz + very high damping). cpp v3's H30r10 is critically
 overdamped (ratio=10 at Hz=30) and is safe. Worth investigating as a
 separate friction-bias coupling issue under bias-only mode.
+
+## Task #83: fixture leak fix — corrected numbers (2026-05-25)
+
+Added `SampleCatalog.Factories` (delegate list — each call returns a fresh
+sample instance) and migrated `FlagOnSampleProbe.cs` to use it. Confirmed
+the leak with `Tests/SampleCatalogFactoriesTests.cs`:
+
+```
+Factories_MatchAll_InOrder_ByName          PASS
+Factory_ReturnsFreshInstanceEachCall       PASS
+CircleStress_SingletonLeak_VersusFreshInstance  PASS
+  ↳ verifies that two Build()s on the SAME instance produce DIFFERENT
+    total dynamic mass (RNG advances), while two fresh instances produce
+    IDENTICAL total dynamic mass.
+```
+
+Re-ran the two `FlagOnSampleProbe` methods with the corrected catalog.
+Several previously-reported numbers were leak artifacts. Trusted post-fix
+values:
+
+### Corrected flag-off N=1 vs flag-on N=1 (lateV, only non-zero deltas)
+
+```
+                          off lateV   on lateV   Δ lateV   notes
+Pyramid                       12.62       4.08    -8.54
+Dominos                       35.41       6.53   -28.88    FT 3 → 0
+CompoundShapes                97.22      14.61   -82.61    (was -33.88; leak was masking 2.4× bigger win)
+CircleStress                  64.26      89.25   +25.00    (was +9.53; leak was masking severity)
+Cantilever                     1.49       1.41    -0.09
+Chain                          5.34       4.27    -1.06
+CollisionFiltering             2.44       0.56    -1.88
+BulletTest                    57.99      57.99     0.00    (was -6.99; leak artifact)
+SliderCrank                   22.36      22.24    -0.12
+Breakable                      0.51       1.34    +0.83    (was +0.06; leak was masking real regression)
+VaryingFriction                1.58       1.82    +0.24
+TheoJansen                   120.00     120.00     0.00    (both capped; FT 1 → 2)
+```
+
+### Corrected flag-on N=1 vs flag-on N=1 + bias-only (only non-noise rows)
+
+```
+                            on lateV   +bias lateV   Δ      notes
+TheoJansen                   120.00          1.15  -118.85   FT 2 → 0    ← still the biggest single win
+EdgeShapes                    80.61         37.91   -42.70   FT 4 → 3
+CircleStress                  89.25         56.27   -32.98   (was -7.87; leak was masking how big this win is)
+SliderCrank                   22.24         14.35    -7.89
+BulletTest                    57.99         51.00    -6.99   FT 2 → 0
+Pinball                       83.26         80.42    -2.84
+Dominos                        6.53          4.07    -2.47
+Pyramid                        4.08          2.29    -1.79
+Breakable                      1.34          0.60    -0.74
+CompoundShapes                14.61         39.06   +24.45   ← NEW REGRESSION revealed by fix
+Chain                          4.27          4.80    +0.53
+```
+
+### New finding revealed by the leak fix: CompoundShapes prefers NGS
+
+**CompoundShapes is the one scene where the NGS path is meaningfully
+better than bias-only**, at any (Hz, ratio) point in the task #80 grid
+sweep. Even at cpp v3's H30r10, bias-only gives lateV=36.13 — worse than
+on+NGS=14.61. The grid sweep already showed this (-58.16 vs off, which
+is +24.45 vs on+NGS, matching here exactly) but the pre-fix probe's
+"+bias 2.24" leak artifact had falsely advertised it as a huge win.
+
+This adds an important nuance to the cause #2 story: **bias-only is the
+right default for most scenes, but CompoundShapes is a counter-example
+worth keeping in the BASELINE so the eventual default flip doesn't
+silently regress it.** The fix path may be: detect CompoundShapes-like
+configurations (many small overlap manifolds, restitution-heavy)
+in `ComputeContactSoftness` and bump the bias gain, or just accept it
+as a documented trade-off and tune per-scene via `WithContactHertz`.
+
+Other findings the fix surfaces:
+- The original probe's BulletTest "−6.99 FT improvement" was a leak.
+  Post-fix shows BulletTest is unaffected by flag-on N=1 alone (both
+  FT 2, lateV 57.99). The −6.99 improvement DOES exist, but only under
+  bias-only mode (post-fix: on=57.99, +bias=51.00, Δ=−6.99).
+- Breakable's "regression" went from +0.06 (noise) to +0.83 (real) —
+  worth noting but small. The on+bias path takes it back down to 0.60
+  (Δ -0.74 vs on, still better than off+1.49).

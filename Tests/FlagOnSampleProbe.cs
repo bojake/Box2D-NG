@@ -22,6 +22,14 @@ namespace Box2DNG.Tests
     /// Probes are not assertions — they emit a table to stderr (no Assert.Fail
     /// unless something diverges to NaN). Numbers are recorded into BASELINE.md
     /// once we like the read.
+    ///
+    /// Uses <see cref="SampleCatalog.Factories"/> rather than <see
+    /// cref="SampleCatalog.All"/> so every <c>Build()</c> gets a fresh
+    /// sample instance. Pre-fix this probe re-used the catalog singletons
+    /// and consumed shared <c>Random(1234)</c> state across configurations,
+    /// inflating regression numbers (CircleStress reported +9.53 lateV when
+    /// the true number with a fresh instance is +24.99, and Chain reported
+    /// +0.53 when fresh-instance is actually −0.53). See task #83.
     /// </summary>
     [TestClass]
     public class FlagOnSampleProbe
@@ -46,13 +54,17 @@ namespace Box2DNG.Tests
         {
             var off = new Dictionary<string, Result>();
             var on = new Dictionary<string, Result>();
+            var names = new List<string>();
 
-            foreach (ISample s in SampleCatalog.All)
+            foreach (Func<ISample> factory in SampleCatalog.Factories)
             {
+                ISample s = factory();
+                names.Add(s.Name);
                 off[s.Name] = Probe(s, useDelta: false, biasOnly: false, n: 1);
             }
-            foreach (ISample s in SampleCatalog.All)
+            foreach (Func<ISample> factory in SampleCatalog.Factories)
             {
+                ISample s = factory();
                 on[s.Name] = Probe(s, useDelta: true, biasOnly: false, n: 1);
             }
 
@@ -61,17 +73,17 @@ namespace Box2DNG.Tests
             sb.AppendLine("Phase 2.5 flag-on N=1 sample-by-sample probe");
             sb.AppendLine("=============================================");
             sb.AppendLine($"{"Sample",-26} {"off lateV",10} {"on lateV",10} {"Δ lateV",10} {"off FT",6} {"on FT",6} {"notes",-20}");
-            foreach (ISample s in SampleCatalog.All)
+            foreach (string name in names)
             {
-                Result o = off[s.Name];
-                Result n = on[s.Name];
+                Result o = off[name];
+                Result n = on[name];
                 string notes = "";
                 if (n.Exploded || o.Exploded) notes += "EXPLODE ";
                 if (n.NonFinite > 0 || o.NonFinite > 0) notes += "NaN ";
                 if (!string.IsNullOrEmpty(n.Error)) notes += $"on-err:{n.Error} ";
                 if (!string.IsNullOrEmpty(o.Error)) notes += $"off-err:{o.Error} ";
                 float delta = n.LateV - o.LateV;
-                sb.AppendLine($"{s.Name,-26} {o.LateV,10:F2} {n.LateV,10:F2} {delta,10:F2} {o.FellThrough,6} {n.FellThrough,6} {notes,-20}");
+                sb.AppendLine($"{name,-26} {o.LateV,10:F2} {n.LateV,10:F2} {delta,10:F2} {o.FellThrough,6} {n.FellThrough,6} {notes,-20}");
             }
             Console.Error.WriteLine(sb.ToString());
         }
@@ -81,13 +93,17 @@ namespace Box2DNG.Tests
         {
             var on = new Dictionary<string, Result>();
             var onBias = new Dictionary<string, Result>();
+            var names = new List<string>();
 
-            foreach (ISample s in SampleCatalog.All)
+            foreach (Func<ISample> factory in SampleCatalog.Factories)
             {
+                ISample s = factory();
+                names.Add(s.Name);
                 on[s.Name] = Probe(s, useDelta: true, biasOnly: false, n: 1);
             }
-            foreach (ISample s in SampleCatalog.All)
+            foreach (Func<ISample> factory in SampleCatalog.Factories)
             {
+                ISample s = factory();
                 onBias[s.Name] = Probe(s, useDelta: true, biasOnly: true, n: 1);
             }
 
@@ -96,16 +112,16 @@ namespace Box2DNG.Tests
             sb.AppendLine("Phase 2.5 cause #2 seed: bias-only vs NGS, flag-on N=1");
             sb.AppendLine("=======================================================");
             sb.AppendLine($"{"Sample",-26} {"on lateV",10} {"+bias lateV",12} {"Δ lateV",10} {"on FT",6} {"+bias FT",8} {"notes",-20}");
-            foreach (ISample s in SampleCatalog.All)
+            foreach (string name in names)
             {
-                Result n = on[s.Name];
-                Result b = onBias[s.Name];
+                Result n = on[name];
+                Result b = onBias[name];
                 string notes = "";
                 if (b.Exploded) notes += "EXPLODE ";
                 if (b.NonFinite > 0) notes += "NaN ";
                 if (!string.IsNullOrEmpty(b.Error)) notes += $"err:{b.Error}";
                 float delta = b.LateV - n.LateV;
-                sb.AppendLine($"{s.Name,-26} {n.LateV,10:F2} {b.LateV,12:F2} {delta,10:F2} {n.FellThrough,6} {b.FellThrough,8} {notes,-20}");
+                sb.AppendLine($"{name,-26} {n.LateV,10:F2} {b.LateV,12:F2} {delta,10:F2} {n.FellThrough,6} {b.FellThrough,8} {notes,-20}");
             }
             Console.Error.WriteLine(sb.ToString());
         }
@@ -113,12 +129,14 @@ namespace Box2DNG.Tests
         [TestMethod, Timeout(120000)]
         public void Pyramid_BiasOnly_SubStep_Probe()
         {
-            ISample sample = new PyramidSample();
-            Result off_n1     = Probe(sample, useDelta: false, biasOnly: false, n: 1);
-            Result on_n1      = Probe(sample, useDelta: true,  biasOnly: false, n: 1);
-            Result on_n4      = Probe(sample, useDelta: true,  biasOnly: false, n: 4);
-            Result on_n4_bias = Probe(sample, useDelta: true,  biasOnly: true,  n: 4);
-            Result on_n1_bias = Probe(sample, useDelta: true,  biasOnly: true,  n: 1);
+            // Fresh PyramidSample() per probe — no shared state inside Pyramid,
+            // but use the factory pattern consistently to keep the probe leak-immune
+            // if Pyramid ever grows state.
+            Result off_n1     = Probe(new PyramidSample(), useDelta: false, biasOnly: false, n: 1);
+            Result on_n1      = Probe(new PyramidSample(), useDelta: true,  biasOnly: false, n: 1);
+            Result on_n4      = Probe(new PyramidSample(), useDelta: true,  biasOnly: false, n: 4);
+            Result on_n4_bias = Probe(new PyramidSample(), useDelta: true,  biasOnly: true,  n: 4);
+            Result on_n1_bias = Probe(new PyramidSample(), useDelta: true,  biasOnly: true,  n: 1);
 
             Console.Error.WriteLine(
                 $"Pyramid lateV: off+N1={off_n1.LateV:F2} (FT {off_n1.FellThrough})" +
