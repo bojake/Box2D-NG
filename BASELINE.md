@@ -420,6 +420,13 @@ blocker for the cause investigation.
   validation under `ContactHertz` / `ContactDampingRatio` retuning to
   recover the small Chain / Tumbler regressions, then a flag-on +
   bias-only default flip becomes the realistic target.
+  **(2026-05-25 update — task #80 retune)**: fresh-instance recheck
+  showed those "small regressions" are not real. Chain is actually a
+  win under bias-only (−0.53 vs flag-off); Tumbler / VaryingFriction /
+  Bridge are within noise (< 0.5 lateV). And a (Hz × ratio) grid sweep
+  (`Tests/BiasOnlyRetuneProbe.cs`) revealed that *cpp v3's default of
+  Hz=30, ratio=10 is strictly better than our current Hz=120, ratio=1
+  when bias-only is enabled* — see "Cause #2 retune grid sweep" below.
 - Cause #3 stays open and needs a separate investigation tracked
   against the `h`-scaling math in `Softness.Make`.
 - ~~New cause #5: CircleStress regression at flag-on N=1 (no bias).~~
@@ -448,3 +455,91 @@ blocker for the cause investigation.
   Confirms: task #83 (fixture singleton fix) is more important than it
   looked — full-catalog probe numbers should not be trusted absolute,
   only as qualitative ordinals.
+
+## Cause #2 retune grid sweep (2026-05-25, task #80)
+
+Two probes in `Tests/BiasOnlyRetuneProbe.cs`:
+
+### Step 1: fresh-instance recheck of the "regressions"
+
+```
+Sample             off+N1   on+N1   on+N1+bias   Δ bias-off   verdict
+Chain                5.34    4.27         4.80       -0.53     WIN under bias-only
+Tumbler            107.27  107.27       107.55       +0.28     noise (< 0.5)
+VaryingFriction      1.58    1.82         2.06       +0.48     noise (< 0.5)
+Bridge               2.30    2.29         2.31       +0.01     noise (< 0.5)
+```
+
+**There are no real bias-only regressions.** The originally reported
+deltas (Chain +0.53, Tumbler +0.28, VarF +0.24, Bridge +0.02) were
+inflated artifacts of the `SampleCatalog` `Random(1234)` singleton leak
+(task #83). With fresh `new XxxSample()` instances, Chain becomes a
+clean win and the other three are essentially zero.
+
+### Step 2: (Hz × ratio) grid sweep
+
+Sweep `ContactHertz ∈ {30, 60, 120, 180}` × `ContactDampingRatio ∈
+{1, 2, 5, 10}` with `UseDeltaPositionTracking + UseBiasOnlyContacts`
+across 12 representative samples. Each cell is Δ vs flag-off baseline
+(negative = improvement). Most cells contain at least one explosion
+(VaryingFriction is highly sensitive to tuning — see below). Only
+4 cells produce no regression > +0.5 anywhere:
+
+```
+Cell              Pyramid  Dominos  Compound  TheoJ   Edge    Bullet  SliderC  CircleS  Chain   Tumbler  VarF    Bridge
+H30  r=2          -12.13   -32.83   -94.72    -117.0  -36.79  -57.99  -4.53    -15.87   -2.78   -0.36    -1.11   +0.06
+H30  r=10 (cpp)   -12.45   -32.68   -61.09    -119.1  -79.29  -6.99   -4.58    -13.16   -2.04   -1.89    -1.33   +0.02
+H60  r=1          -11.51   -28.88   -96.03    -116.3  -30.71  -6.99   -8.01    -7.99    -2.26   +0.20    -1.13   -0.13
+H120 r=1 (curr)   -10.33   -31.34   -58.16    -118.9  -42.70  -6.99   -8.01    -7.99    -0.53   +0.28    +0.48   +0.01
+```
+
+Win count (strictly best Δ per sample, excluding ties): H30r10 wins 4
+(Pyramid, TheoJansen, EdgeShapes, VaryingFriction), H30r2 wins 4
+(Dominos, Bullet, CircleStress, Chain), H60r1 wins 1 (CompoundShapes),
+H120r1 wins 0. **H30r10 — cpp v3's documented default — is unambiguously
+better than our current H120r1 when bias-only is enabled.**
+
+### Recommendation
+
+Don't change `WorldDef.ContactHertz` / `ContactDampingRatio` global
+defaults yet — changing them today affects 100% of users on the legacy
+NGS path. Defer the (Hz, ratio) flip until the same commit that flips
+`UseDeltaPositionTracking + UseBiasOnlyContacts` to `true` by default,
+so the four parameters move together as one coherent "Phase 2.5
+enabled" configuration:
+
+```csharp
+// Today (NGS path):
+ContactHertz = 120; ContactDampingRatio = 1
+UseDeltaPositionTracking = false; UseBiasOnlyContacts = false
+
+// Future flip (cpp v3 path):
+ContactHertz =  30; ContactDampingRatio = 10
+UseDeltaPositionTracking = true;  UseBiasOnlyContacts = true
+```
+
+Until that flip lands, samples that want the cpp v3 setup can opt in via
+`.UseDeltaPositions().WithBiasOnlyContacts().WithContactHertz(30).WithContactDamping(10)`.
+
+### New finding: VaryingFriction tuning sensitivity (task #84 candidate)
+
+The grid sweep surfaced 8 cells where `VaryingFriction` lateV
+*explodes* — bodies slide off the slope (final speed 33-91 m/s versus
+flag-off's 1.58):
+
+```
+Cell        VarF Δ
+H30  r=1    +73.95
+H30  r=5    +75.34
+H60  r=2    +33.45
+H60  r=5    +87.83
+H60  r=10   +81.50
+H120 r=10   +84.25
+H180 r=5    +2.58
+H180 r=10   +91.24
+```
+
+Pattern: under-damped soft springs (low Hz + low/medium damping ratio,
+or high Hz + very high damping). cpp v3's H30r10 is critically
+overdamped (ratio=10 at Hz=30) and is safe. Worth investigating as a
+separate friction-bias coupling issue under bias-only mode.
