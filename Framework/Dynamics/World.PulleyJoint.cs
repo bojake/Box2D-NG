@@ -40,8 +40,9 @@ namespace Box2DNG
             int indexA = joint.BodyA;
             int indexB = joint.BodyB;
 
-            Vec2 rA = Rot.Mul(_bodyRotations[indexA], joint.LocalAnchorA - _bodyLocalCenters[indexA]);
-            Vec2 rB = Rot.Mul(_bodyRotations[indexB], joint.LocalAnchorB - _bodyLocalCenters[indexB]);
+            // Phase 2.5 Stage H — effective rotations.
+            Vec2 rA = Rot.Mul(EffectiveRotation(indexA), joint.LocalAnchorA - _bodyLocalCenters[indexA]);
+            Vec2 rB = Rot.Mul(EffectiveRotation(indexB), joint.LocalAnchorB - _bodyLocalCenters[indexB]);
 
             Vec2 vA = _bodyLinearVelocities[indexA] + Vec2.Cross(_bodyAngularVelocities[indexA], rA);
             Vec2 vB = _bodyLinearVelocities[indexB] + Vec2.Cross(_bodyAngularVelocities[indexB], rB);
@@ -64,11 +65,13 @@ namespace Box2DNG
             ref PulleyJointData joint = ref _pulleyJointsData[index];
             int indexA = joint.BodyA;
             int indexB = joint.BodyB;
+            bool useDelta = _def.UseDeltaPositionTracking;
 
-            ref Vec2 cA = ref _bodyPositions[indexA];
-            ref Vec2 cB = ref _bodyPositions[indexB];
-            float aA = _bodyRotations[indexA].Angle;
-            float aB = _bodyRotations[indexB].Angle;
+            // Phase 2.5 Stage H — effective reads; writes branch on the flag.
+            Vec2 cA = EffectivePosition(indexA);
+            Vec2 cB = EffectivePosition(indexB);
+            float aA = EffectiveRotation(indexA).Angle;
+            float aB = EffectiveRotation(indexB).Angle;
 
             Vec2 rA = Rot.Mul(new Rot(aA), joint.LocalAnchorA - _bodyLocalCenters[indexA]);
             Vec2 rB = Rot.Mul(new Rot(aB), joint.LocalAnchorB - _bodyLocalCenters[indexB]);
@@ -90,13 +93,29 @@ namespace Box2DNG
             Vec2 PA = -impulse * uA;
             Vec2 PB = -joint.Ratio * impulse * uB;
 
-            cA += _bodyInverseMasses[indexA] * PA;
-            cB += _bodyInverseMasses[indexB] * PB;
+            if (useDelta)
+            {
+                _bodyDeltaPositions[indexA] += _bodyInverseMasses[indexA] * PA;
+                _bodyDeltaPositions[indexB] += _bodyInverseMasses[indexB] * PB;
+            }
+            else
+            {
+                _bodyPositions[indexA] += _bodyInverseMasses[indexA] * PA;
+                _bodyPositions[indexB] += _bodyInverseMasses[indexB] * PB;
+            }
             aA += _bodyInverseInertias[indexA] * Vec2.Cross(rA, PA);
             aB += _bodyInverseInertias[indexB] * Vec2.Cross(rB, PB);
 
-            _bodyRotations[indexA] = new Rot(aA);
-            _bodyRotations[indexB] = new Rot(aB);
+            if (useDelta)
+            {
+                _bodyDeltaRotations[indexA] = Rot.MulT(_bodyStepStartRotations[indexA], new Rot(aA));
+                _bodyDeltaRotations[indexB] = Rot.MulT(_bodyStepStartRotations[indexB], new Rot(aB));
+            }
+            else
+            {
+                _bodyRotations[indexA] = new Rot(aA);
+                _bodyRotations[indexB] = new Rot(aB);
+            }
         }
     }
 }

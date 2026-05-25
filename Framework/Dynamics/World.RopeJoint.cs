@@ -78,11 +78,13 @@ namespace Box2DNG
             ref RopeJointData joint = ref _ropeJointsData[index];
             int indexA = joint.BodyA;
             int indexB = joint.BodyB;
+            bool useDelta = _def.UseDeltaPositionTracking;
 
-            ref Vec2 cA = ref _bodyPositions[indexA];
-            ref Vec2 cB = ref _bodyPositions[indexB];
-            float aA = _bodyRotations[indexA].Angle;
-            float aB = _bodyRotations[indexB].Angle;
+            // Phase 2.5 Stage I — effective reads; writes branch on the flag.
+            Vec2 cA = EffectivePosition(indexA);
+            Vec2 cB = EffectivePosition(indexB);
+            float aA = EffectiveRotation(indexA).Angle;
+            float aB = EffectiveRotation(indexB).Angle;
 
             Vec2 rA = Rot.Mul(new Rot(aA), joint.LocalAnchorA - _bodyLocalCenters[indexA]);
             Vec2 rB = Rot.Mul(new Rot(aB), joint.LocalAnchorB - _bodyLocalCenters[indexB]);
@@ -101,13 +103,29 @@ namespace Box2DNG
             float impulse = -joint.Mass * C;
             Vec2 P = impulse * u;
 
-            cA -= _bodyInverseMasses[indexA] * P;
-            cB += _bodyInverseMasses[indexB] * P;
+            if (useDelta)
+            {
+                _bodyDeltaPositions[indexA] -= _bodyInverseMasses[indexA] * P;
+                _bodyDeltaPositions[indexB] += _bodyInverseMasses[indexB] * P;
+            }
+            else
+            {
+                _bodyPositions[indexA] -= _bodyInverseMasses[indexA] * P;
+                _bodyPositions[indexB] += _bodyInverseMasses[indexB] * P;
+            }
             aA -= _bodyInverseInertias[indexA] * Vec2.Cross(rA, P);
             aB += _bodyInverseInertias[indexB] * Vec2.Cross(rB, P);
 
-            _bodyRotations[indexA] = new Rot(aA);
-            _bodyRotations[indexB] = new Rot(aB);
+            if (useDelta)
+            {
+                _bodyDeltaRotations[indexA] = Rot.MulT(_bodyStepStartRotations[indexA], new Rot(aA));
+                _bodyDeltaRotations[indexB] = Rot.MulT(_bodyStepStartRotations[indexB], new Rot(aB));
+            }
+            else
+            {
+                _bodyRotations[indexA] = new Rot(aA);
+                _bodyRotations[indexB] = new Rot(aB);
+            }
         }
     }
 }

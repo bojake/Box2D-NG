@@ -280,6 +280,407 @@ namespace Box2DNG.Tests
             }
         }
 
+        [TestMethod]
+        public void RigidWeld_TwoBodiesUnderGravity_FlagOnMatchesFlagOff()
+        {
+            // Phase 2.5 Stage C — the WeldJoint migration's load-bearing test.
+            // Two bodies welded with no soft springs (rigid axes), falling
+            // under gravity. The position-constraint NGS pass writes to
+            // _bodyPositions / _bodyRotations in the flag-off path and to
+            // _bodyDeltaPositions / _bodyDeltaRotations in the flag-on path.
+            // Final pose must match across the flag — the migration must
+            // not perturb the existing rigid-weld physics.
+            (Vec2 aOff, Vec2 bOff) = RunWeldedPair(useDelta: false, softLinearHertz: 0f, softAngularHertz: 0f);
+            (Vec2 aOn, Vec2 bOn) = RunWeldedPair(useDelta: true, softLinearHertz: 0f, softAngularHertz: 0f);
+            Assert.AreEqual(aOff.X, aOn.X, 1e-3f, $"A.X mismatch. off={aOff.X} on={aOn.X}");
+            Assert.AreEqual(aOff.Y, aOn.Y, 1e-3f, $"A.Y mismatch. off={aOff.Y} on={aOn.Y}");
+            Assert.AreEqual(bOff.X, bOn.X, 1e-3f, $"B.X mismatch. off={bOff.X} on={bOn.X}");
+            Assert.AreEqual(bOff.Y, bOn.Y, 1e-3f, $"B.Y mismatch. off={bOff.Y} on={bOn.Y}");
+        }
+
+        [TestMethod]
+        public void SoftWeld_TwoBodiesUnderGravity_FlagOnMatchesFlagOff()
+        {
+            // Same scene, with soft spring (Hertz > 0) so the bias-driven
+            // path in SolveWeldJointVelocityConstraints fires. With flag
+            // off the bias reads _bodyPositions directly; with flag on it
+            // reads via EffectivePosition. Both should produce the same
+            // result for a single-step trajectory.
+            (Vec2 aOff, Vec2 bOff) = RunWeldedPair(useDelta: false, softLinearHertz: 30f, softAngularHertz: 30f);
+            (Vec2 aOn, Vec2 bOn) = RunWeldedPair(useDelta: true, softLinearHertz: 30f, softAngularHertz: 30f);
+            Assert.AreEqual(aOff.X, aOn.X, 1e-3f, $"A.X mismatch. off={aOff.X} on={aOn.X}");
+            Assert.AreEqual(aOff.Y, aOn.Y, 1e-3f, $"A.Y mismatch. off={aOff.Y} on={aOn.Y}");
+            Assert.AreEqual(bOff.X, bOn.X, 1e-3f, $"B.X mismatch. off={bOff.X} on={bOn.X}");
+            Assert.AreEqual(bOff.Y, bOn.Y, 1e-3f, $"B.Y mismatch. off={bOff.Y} on={bOn.Y}");
+        }
+
+        [TestMethod]
+        public void RigidWeld_AnchoredToStatic_FlagOnHoldsPosition()
+        {
+            // A dynamic body welded rigidly to a static anchor at the same
+            // position should stay near the anchor over time. Under flag-on
+            // the position-constraint NGS writes the corrections to the
+            // delta arrays and ApplyBodyDeltas commits them per step;
+            // ResetSweeps + EffectivePosition round-trip must keep the body
+            // bounded.
+            World world = new World(new WorldDef()
+                .WithGravity(new Vec2(0f, -10f))
+                .UseDeltaPositions(true));
+            Body anchor = world.CreateBody(new BodyDef().AsStatic().At(0f, 5f));
+            Body hanging = world.CreateBody(new BodyDef().AsDynamic().At(0f, 5f));
+            hanging.CreateFixture(new FixtureDef(new CircleShape(0.5f)).WithDensity(1f));
+            // No soft spring — rigid weld exercises the position-constraint NGS path.
+            world.CreateJoint(new WeldJointDef(anchor, hanging, new Vec2(0f, 5f)));
+
+            for (int i = 0; i < 60; ++i) world.Step(1f / 60f);
+            float drift = (hanging.Transform.P - new Vec2(0f, 5f)).Length;
+            Assert.IsTrue(drift < 0.5f,
+                $"Rigid weld to static under flag-on must hold position. drift={drift}");
+        }
+
+        [TestMethod]
+        public void SoftWeld_AnchoredToStatic_FlagOnHoldsPosition()
+        {
+            // Soft variant — exercises the velocity-constraint bias path.
+            World world = new World(new WorldDef()
+                .WithGravity(new Vec2(0f, -10f))
+                .UseDeltaPositions(true));
+            Body anchor = world.CreateBody(new BodyDef().AsStatic().At(0f, 5f));
+            Body hanging = world.CreateBody(new BodyDef().AsDynamic().At(0f, 5f));
+            hanging.CreateFixture(new FixtureDef(new CircleShape(0.5f)).WithDensity(1f));
+            world.CreateJoint(new WeldJointDef(anchor, hanging, new Vec2(0f, 5f))
+                .WithLinearSpring(30f, 0.7f)
+                .WithAngularSpring(30f, 0.7f));
+
+            for (int i = 0; i < 180; ++i) world.Step(1f / 60f);
+            float drift = (hanging.Transform.P - new Vec2(0f, 5f)).Length;
+            Assert.IsTrue(drift < 1f,
+                $"Soft weld to static under flag-on must constrain drift. drift={drift}");
+        }
+
+        [TestMethod]
+        public void Weld_DeterminismUnderFlag()
+        {
+            // Build the same welded scene twice with flag-on, step it the
+            // same number of times, compare final positions. Deterministic.
+            (Vec2 aA, Vec2 bA) = RunWeldedPair(useDelta: true, softLinearHertz: 0f, softAngularHertz: 0f);
+            (Vec2 aB, Vec2 bB) = RunWeldedPair(useDelta: true, softLinearHertz: 0f, softAngularHertz: 0f);
+            Assert.AreEqual(aA.X, aB.X, $"determinism A.X: {aA.X} vs {aB.X}");
+            Assert.AreEqual(aA.Y, aB.Y, $"determinism A.Y: {aA.Y} vs {aB.Y}");
+            Assert.AreEqual(bA.X, bB.X, $"determinism B.X: {bA.X} vs {bB.X}");
+            Assert.AreEqual(bA.Y, bB.Y, $"determinism B.Y: {bA.Y} vs {bB.Y}");
+        }
+
+        [TestMethod]
+        public void RevoluteJoint_AnchoredHangingBody_FlagOnMatchesFlagOff()
+        {
+            // Phase 2.5 Stage D — Revolute joint migration. A dynamic body
+            // hanging by a revolute pin under gravity must trace the same
+            // arc whether flag-on or flag-off, since the rigid-axis NGS
+            // path (no soft spring) writes through the migrated delta path.
+            (Vec2 off, Vec2 on) = RunRevoluteHang();
+            Assert.AreEqual(off.X, on.X, 1e-3f, $"X mismatch. off={off.X} on={on.X}");
+            Assert.AreEqual(off.Y, on.Y, 1e-3f, $"Y mismatch. off={off.Y} on={on.Y}");
+        }
+
+        [TestMethod]
+        public void PrismaticJoint_SliderUnderGravity_FlagOnMatchesFlagOff()
+        {
+            // Phase 2.5 Stage E — Prismatic. The d vector + axis math is
+            // recomputed inside SolveVelocityConstraints using effective
+            // reads; rigid-axis position-constraint NGS uses the same.
+            (Vec2 off, Vec2 on) = RunPrismaticSlider();
+            Assert.AreEqual(off.X, on.X, 1e-3f, $"X mismatch. off={off.X} on={on.X}");
+            Assert.AreEqual(off.Y, on.Y, 1e-3f, $"Y mismatch. off={off.Y} on={on.Y}");
+        }
+
+        [TestMethod]
+        public void WheelJoint_SuspensionUnderGravity_FlagOnMatchesFlagOff()
+        {
+            // Phase 2.5 Stage F — Wheel. Position-constraint NGS does the
+            // two-phase perp-then-limit accumulation; the CommitWheelDelta
+            // helper splits the final write across the flag branches.
+            (Vec2 off, Vec2 on) = RunWheelSuspension();
+            Assert.AreEqual(off.X, on.X, 1e-3f, $"X mismatch. off={off.X} on={on.X}");
+            Assert.AreEqual(off.Y, on.Y, 1e-3f, $"Y mismatch. off={off.Y} on={on.Y}");
+        }
+
+        [TestMethod]
+        public void DistanceJoint_LengthConstraint_FlagOnMatchesFlagOff()
+        {
+            // Phase 2.5 Stage G — Distance. The velocity-solve sin/cos
+            // round-trip via `new Rot(EffectiveRotation(id).Angle)` is
+            // preserved (caught the Dominos byte-identity regression).
+            (Vec2 off, Vec2 on) = RunDistanceJoint();
+            Assert.AreEqual(off.X, on.X, 1e-3f, $"X mismatch. off={off.X} on={on.X}");
+            Assert.AreEqual(off.Y, on.Y, 1e-3f, $"Y mismatch. off={off.Y} on={on.Y}");
+        }
+
+        [TestMethod]
+        public void PulleyJoint_Counterweight_FlagOnMatchesFlagOff()
+        {
+            // Phase 2.5 Stage H — Pulley.
+            (Vec2 off, Vec2 on) = RunPulleyJoint();
+            Assert.AreEqual(off.X, on.X, 1e-3f, $"X mismatch. off={off.X} on={on.X}");
+            Assert.AreEqual(off.Y, on.Y, 1e-3f, $"Y mismatch. off={off.Y} on={on.Y}");
+        }
+
+        [TestMethod]
+        public void ContactNGS_BoxOnGround_BothFlagsSettle()
+        {
+            // Phase 2.5 Stage K — contact NGS migration. A box falling onto
+            // a static ground exercises SolvePositionConstraints' contact
+            // NGS pass. Flag-off writes via body.SetTransformFromCenter;
+            // flag-on writes absolute effective poses into the delta arrays.
+            // Both should settle the box near Y = 0.5 (ground + half-extent).
+            //
+            // Bit-identical comparison is too strict — the flag-on path
+            // goes through more arithmetic (step-start + delta + sqrt
+            // normalization), introducing ulp-level rounding that
+            // accumulates over hundreds of steps but doesn't change the
+            // physical outcome.
+            (Vec2 off, Vec2 on) = RunBoxOnGround();
+            Assert.IsTrue(off.Y > 0.4f && off.Y < 0.7f, $"flag-off box should rest near Y=0.5. y={off.Y}");
+            Assert.IsTrue(on.Y > 0.4f && on.Y < 0.7f, $"flag-on box should rest near Y=0.5. y={on.Y}");
+        }
+
+        [TestMethod]
+        public void ContactNGS_StackOfBoxes_BothFlagsStable()
+        {
+            // Multi-body stack exercises contact NGS across many bodies and
+            // contacts per iteration. Flag-on tends to settle faster (cpp
+            // v3's expected behavior — the absolute-delta write semantics
+            // mean each NGS iteration sees the latest effective pose
+            // immediately, not the partially-committed mix the flag-off
+            // ref-based path produces).
+            //
+            // We pin qualitative stack stability: top box ends up at
+            // 2 < Y < 3, middle 1 < Y < 2, bottom 0 < Y < 1 — no fall-
+            // through, no explosion, in both modes.
+            var off = RunStackTriple(useDelta: false);
+            var on = RunStackTriple(useDelta: true);
+            foreach (var (label, stack) in new[] { ("flag-off", off), ("flag-on", on) })
+            {
+                Assert.IsTrue(stack.bot.Y > 0f && stack.bot.Y < 1f, $"{label} bottom should be 0 < y < 1. y={stack.bot.Y}");
+                Assert.IsTrue(stack.mid.Y > 1f && stack.mid.Y < 2f, $"{label} middle should be 1 < y < 2. y={stack.mid.Y}");
+                Assert.IsTrue(stack.top.Y > 2f && stack.top.Y < 3f, $"{label} top should be 2 < y < 3. y={stack.top.Y}");
+            }
+        }
+
+        private static (Vec2 off, Vec2 on) RunBoxOnGround()
+        {
+            return (RunBox(useDelta: false), RunBox(useDelta: true));
+
+            static Vec2 RunBox(bool useDelta)
+            {
+                World world = new World(new WorldDef()
+                    .WithGravity(new Vec2(0f, -10f))
+                    .UseDeltaPositions(useDelta));
+                Body ground = world.CreateBody(new BodyDef().AsStatic().At(0f, 0f));
+                ground.CreateFixture(new FixtureDef(new SegmentShape(new Vec2(-10f, 0f), new Vec2(10f, 0f))));
+                Body box = world.CreateBody(new BodyDef().AsDynamic().At(0f, 5f));
+                box.CreateFixture(new FixtureDef(new PolygonShape(new[]
+                {
+                    new Vec2(-0.5f, -0.5f), new Vec2(0.5f, -0.5f),
+                    new Vec2(0.5f, 0.5f), new Vec2(-0.5f, 0.5f),
+                })).WithDensity(1f));
+                for (int i = 0; i < 120; ++i) world.Step(1f / 60f);
+                return box.Transform.P;
+            }
+        }
+
+        private static (Vec2 top, Vec2 mid, Vec2 bot) RunStackTriple(bool useDelta)
+        {
+            World world = new World(new WorldDef()
+                .WithGravity(new Vec2(0f, -10f))
+                .UseDeltaPositions(useDelta));
+            Body ground = world.CreateBody(new BodyDef().AsStatic().At(0f, 0f));
+            ground.CreateFixture(new FixtureDef(new SegmentShape(new Vec2(-10f, 0f), new Vec2(10f, 0f))));
+            Vec2[] boxVerts = new[]
+            {
+                new Vec2(-0.5f, -0.5f), new Vec2(0.5f, -0.5f),
+                new Vec2(0.5f, 0.5f), new Vec2(-0.5f, 0.5f),
+            };
+            Body[] boxes = new Body[3];
+            for (int i = 0; i < 3; ++i)
+            {
+                boxes[i] = world.CreateBody(new BodyDef().AsDynamic().At(0f, 1f + i * 1.2f));
+                boxes[i].CreateFixture(new FixtureDef(new PolygonShape(boxVerts)).WithDensity(1f));
+            }
+            for (int i = 0; i < 240; ++i) world.Step(1f / 60f);
+            return (boxes[2].Transform.P, boxes[1].Transform.P, boxes[0].Transform.P);
+        }
+
+        [TestMethod]
+        public void MotorJoint_TargetTracking_FlagOnMatchesFlagOff()
+        {
+            // Phase 2.5 Stage J — Motor + Friction joints have no Solve-loop
+            // reads of position state (their bias is captured at Init, which
+            // runs once at PrepareConstraints when delta is zero). They
+            // should be auto-safe at flag-on without any code change.
+            // Verify with a parity test.
+            (Vec2 off, Vec2 on) = RunMotorJoint();
+            Assert.AreEqual(off.X, on.X, 1e-3f, $"X mismatch. off={off.X} on={on.X}");
+            Assert.AreEqual(off.Y, on.Y, 1e-3f, $"Y mismatch. off={off.Y} on={on.Y}");
+        }
+
+        [TestMethod]
+        public void RopeJoint_MaxLengthConstraint_FlagOnMatchesFlagOff()
+        {
+            // Phase 2.5 Stage I — Rope.
+            (Vec2 off, Vec2 on) = RunRopeJoint();
+            Assert.AreEqual(off.X, on.X, 1e-3f, $"X mismatch. off={off.X} on={on.X}");
+            Assert.AreEqual(off.Y, on.Y, 1e-3f, $"Y mismatch. off={off.Y} on={on.Y}");
+        }
+
+        private static (Vec2 hangOff, Vec2 hangOn) RunRevoluteHang()
+        {
+            return (RunRevolute(useDelta: false), RunRevolute(useDelta: true));
+
+            static Vec2 RunRevolute(bool useDelta)
+            {
+                World world = new World(new WorldDef()
+                    .WithGravity(new Vec2(0f, -10f))
+                    .UseDeltaPositions(useDelta));
+                Body anchor = world.CreateBody(new BodyDef().AsStatic().At(0f, 5f));
+                Body hanging = world.CreateBody(new BodyDef().AsDynamic().At(1f, 5f));
+                hanging.CreateFixture(new FixtureDef(new CircleShape(0.3f)).WithDensity(1f));
+                world.CreateJoint(new RevoluteJointDef(anchor, hanging, new Vec2(0f, 5f)));
+                for (int i = 0; i < 30; ++i) world.Step(1f / 60f);
+                return hanging.Transform.P;
+            }
+        }
+
+        private static (Vec2 off, Vec2 on) RunPrismaticSlider()
+        {
+            return (RunPrismatic(useDelta: false), RunPrismatic(useDelta: true));
+
+            static Vec2 RunPrismatic(bool useDelta)
+            {
+                World world = new World(new WorldDef()
+                    .WithGravity(new Vec2(0f, -10f))
+                    .UseDeltaPositions(useDelta));
+                Body track = world.CreateBody(new BodyDef().AsStatic().At(0f, 0f));
+                Body slider = world.CreateBody(new BodyDef().AsDynamic().At(0f, 5f));
+                slider.CreateFixture(new FixtureDef(new CircleShape(0.3f)).WithDensity(1f));
+                world.CreateJoint(new PrismaticJointDef(track, slider, new Vec2(0f, 5f), new Vec2(0f, 1f)));
+                for (int i = 0; i < 30; ++i) world.Step(1f / 60f);
+                return slider.Transform.P;
+            }
+        }
+
+        private static (Vec2 off, Vec2 on) RunWheelSuspension()
+        {
+            return (RunWheel(useDelta: false), RunWheel(useDelta: true));
+
+            static Vec2 RunWheel(bool useDelta)
+            {
+                World world = new World(new WorldDef()
+                    .WithGravity(new Vec2(0f, -10f))
+                    .UseDeltaPositions(useDelta));
+                Body chassis = world.CreateBody(new BodyDef().AsDynamic().At(0f, 5f));
+                chassis.CreateFixture(new FixtureDef(new CircleShape(0.5f)).WithDensity(1f));
+                Body wheel = world.CreateBody(new BodyDef().AsDynamic().At(0f, 4f));
+                wheel.CreateFixture(new FixtureDef(new CircleShape(0.3f)).WithDensity(1f));
+                world.CreateJoint(new WheelJointDef(chassis, wheel, new Vec2(0f, 4f), new Vec2(0f, 1f)));
+                for (int i = 0; i < 30; ++i) world.Step(1f / 60f);
+                return wheel.Transform.P;
+            }
+        }
+
+        private static (Vec2 off, Vec2 on) RunDistanceJoint()
+        {
+            return (RunDistance(useDelta: false), RunDistance(useDelta: true));
+
+            static Vec2 RunDistance(bool useDelta)
+            {
+                World world = new World(new WorldDef()
+                    .WithGravity(new Vec2(0f, -10f))
+                    .UseDeltaPositions(useDelta));
+                Body anchor = world.CreateBody(new BodyDef().AsStatic().At(0f, 5f));
+                Body weight = world.CreateBody(new BodyDef().AsDynamic().At(2f, 5f));
+                weight.CreateFixture(new FixtureDef(new CircleShape(0.3f)).WithDensity(1f));
+                world.CreateJoint(new DistanceJointDef(anchor, weight, new Vec2(0f, 5f), new Vec2(2f, 5f)));
+                for (int i = 0; i < 30; ++i) world.Step(1f / 60f);
+                return weight.Transform.P;
+            }
+        }
+
+        private static (Vec2 off, Vec2 on) RunPulleyJoint()
+        {
+            return (RunPulley(useDelta: false), RunPulley(useDelta: true));
+
+            static Vec2 RunPulley(bool useDelta)
+            {
+                World world = new World(new WorldDef()
+                    .WithGravity(new Vec2(0f, -10f))
+                    .UseDeltaPositions(useDelta));
+                Body a = world.CreateBody(new BodyDef().AsDynamic().At(-2f, 5f));
+                a.CreateFixture(new FixtureDef(new CircleShape(0.3f)).WithDensity(1f));
+                Body b = world.CreateBody(new BodyDef().AsDynamic().At(2f, 5f));
+                b.CreateFixture(new FixtureDef(new CircleShape(0.3f)).WithDensity(2f));
+                world.CreateJoint(new PulleyJointDef(a, b,
+                    new Vec2(-2f, 10f), new Vec2(2f, 10f),
+                    new Vec2(-2f, 5f), new Vec2(2f, 5f),
+                    ratio: 1f));
+                for (int i = 0; i < 30; ++i) world.Step(1f / 60f);
+                return a.Transform.P;
+            }
+        }
+
+        private static (Vec2 off, Vec2 on) RunMotorJoint()
+        {
+            return (RunMotor(useDelta: false), RunMotor(useDelta: true));
+
+            static Vec2 RunMotor(bool useDelta)
+            {
+                World world = new World(new WorldDef()
+                    .WithGravity(Vec2.Zero)
+                    .UseDeltaPositions(useDelta));
+                Body a = world.CreateBody(new BodyDef().AsStatic().At(0f, 0f));
+                Body b = world.CreateBody(new BodyDef().AsDynamic().At(2f, 0f));
+                b.CreateFixture(new FixtureDef(new CircleShape(0.3f)).WithDensity(1f));
+                world.CreateJoint(new MotorJointDef(a, b));
+                for (int i = 0; i < 30; ++i) world.Step(1f / 60f);
+                return b.Transform.P;
+            }
+        }
+
+        private static (Vec2 off, Vec2 on) RunRopeJoint()
+        {
+            return (RunRope(useDelta: false), RunRope(useDelta: true));
+
+            static Vec2 RunRope(bool useDelta)
+            {
+                World world = new World(new WorldDef()
+                    .WithGravity(new Vec2(0f, -10f))
+                    .UseDeltaPositions(useDelta));
+                Body anchor = world.CreateBody(new BodyDef().AsStatic().At(0f, 10f));
+                Body weight = world.CreateBody(new BodyDef().AsDynamic().At(0f, 5f));
+                weight.CreateFixture(new FixtureDef(new CircleShape(0.3f)).WithDensity(1f));
+                world.CreateJoint(new RopeJointDef(anchor, weight, new Vec2(0f, 10f), new Vec2(0f, 5f)).WithMaxLength(5f));
+                for (int i = 0; i < 30; ++i) world.Step(1f / 60f);
+                return weight.Transform.P;
+            }
+        }
+
+        private static (Vec2 bodyA, Vec2 bodyB) RunWeldedPair(bool useDelta, float softLinearHertz, float softAngularHertz)
+        {
+            World world = new World(new WorldDef()
+                .WithGravity(new Vec2(0f, -10f))
+                .UseDeltaPositions(useDelta));
+            Body a = world.CreateBody(new BodyDef().AsDynamic().At(-1f, 10f));
+            a.CreateFixture(new FixtureDef(new CircleShape(0.5f)).WithDensity(1f));
+            Body b = world.CreateBody(new BodyDef().AsDynamic().At(1f, 10f));
+            b.CreateFixture(new FixtureDef(new CircleShape(0.5f)).WithDensity(1f));
+            WeldJointDef def = new WeldJointDef(a, b, new Vec2(0f, 10f));
+            if (softLinearHertz > 0f) def = def.WithLinearSpring(softLinearHertz, 0.5f);
+            if (softAngularHertz > 0f) def = def.WithAngularSpring(softAngularHertz, 0.5f);
+            world.CreateJoint(def);
+            for (int i = 0; i < 30; ++i) world.Step(1f / 60f);
+            return (a.Transform.P, b.Transform.P);
+        }
+
         private static float RunFreeFall(bool useDelta, int subStepCount = 1)
         {
             World world = new World(new WorldDef()

@@ -73,9 +73,13 @@ namespace Box2DNG
             float linearImpulseScale = 0f;
             if (!joint.LinearSpring.IsZero)
             {
-                // Current world-space anchor delta minus the rest value captured
-                // at Prepare time. Drives drift back to zero.
-                Vec2 currentDelta = (_bodyPositions[indexB] + joint.RB) - (_bodyPositions[indexA] + joint.RA);
+                // Phase 2.5 Stage C — read effective anchor positions (step-
+                // start + within-step delta) so the bias signal includes the
+                // post-IntegratePositions drift when the flag is on. With
+                // the flag off the delta arrays stay at zero through the
+                // sub-step loop and EffectivePosition degenerates to a
+                // direct read of _bodyPositions — byte-identical.
+                Vec2 currentDelta = (EffectivePosition(indexB) + joint.RB) - (EffectivePosition(indexA) + joint.RA);
                 Vec2 C = currentDelta - joint.DeltaCenter;
                 linearBias = joint.LinearSpring.BiasRate * C;
                 linearMassScale = joint.LinearSpring.MassScale;
@@ -99,7 +103,8 @@ namespace Box2DNG
             float angularImpulseScale = 0f;
             if (!joint.AngularSpring.IsZero)
             {
-                float angleError = (_bodyRotations[indexB].Angle - _bodyRotations[indexA].Angle) - joint.ReferenceAngle;
+                // Phase 2.5 Stage C — effective rotations include within-step delta.
+                float angleError = (EffectiveRotation(indexB).Angle - EffectiveRotation(indexA).Angle) - joint.ReferenceAngle;
                 angularBias = joint.AngularSpring.BiasRate * angleError;
                 angularMassScale = joint.AngularSpring.MassScale;
                 angularImpulseScale = joint.AngularSpring.ImpulseScale;
@@ -129,11 +134,18 @@ namespace Box2DNG
 
             int indexA = joint.BodyA;
             int indexB = joint.BodyB;
+            bool useDelta = _def.UseDeltaPositionTracking;
 
-            ref Vec2 cA = ref _bodyPositions[indexA];
-            ref Vec2 cB = ref _bodyPositions[indexB];
-            float aA = _bodyRotations[indexA].Angle;
-            float aB = _bodyRotations[indexB].Angle;
+            // Phase 2.5 Stage C — reads are effective; writes branch on the flag.
+            // With flag off, EffectivePosition / EffectiveRotation degenerate to
+            // direct array reads (delta is zero), and the writes go to
+            // _bodyPositions / _bodyRotations exactly like the pre-Stage-C
+            // path. With flag on, the step-start arrays stay frozen and we
+            // accumulate corrections into the delta arrays.
+            Vec2 cA = EffectivePosition(indexA);
+            Vec2 cB = EffectivePosition(indexB);
+            float aA = EffectiveRotation(indexA).Angle;
+            float aB = EffectiveRotation(indexB).Angle;
 
             float mA = _bodyInverseMasses[indexA];
             float mB = _bodyInverseMasses[indexB];
@@ -152,8 +164,16 @@ namespace Box2DNG
                 Mat22 k = new Mat22(new Vec2(k11, k12), new Vec2(k12, k22));
                 Vec2 impulse = Solve22(k, -C);
 
-                cA -= mA * impulse;
-                cB += mB * impulse;
+                if (useDelta)
+                {
+                    _bodyDeltaPositions[indexA] -= mA * impulse;
+                    _bodyDeltaPositions[indexB] += mB * impulse;
+                }
+                else
+                {
+                    _bodyPositions[indexA] -= mA * impulse;
+                    _bodyPositions[indexB] += mB * impulse;
+                }
                 aA -= iA * Vec2.Cross(rA, impulse);
                 aB += iB * Vec2.Cross(rB, impulse);
             }
@@ -166,8 +186,21 @@ namespace Box2DNG
                 aB += iB * angularImpulse;
             }
 
-            _bodyRotations[indexA] = new Rot(aA);
-            _bodyRotations[indexB] = new Rot(aB);
+            // Write the final effective angles back. Under flag-on, that means
+            // updating the delta rotation so that `Mul(deltaRot, stepStartRot) ==
+            // Rot(aA)` — i.e., `deltaRot = MulT(stepStartRot, Rot(aA))`. The
+            // ApplyBodyDeltas pass at end of outer Step composes delta with
+            // step-start and normalizes (see Stage B's magnitude-drift fix).
+            if (useDelta)
+            {
+                _bodyDeltaRotations[indexA] = Rot.MulT(_bodyStepStartRotations[indexA], new Rot(aA));
+                _bodyDeltaRotations[indexB] = Rot.MulT(_bodyStepStartRotations[indexB], new Rot(aB));
+            }
+            else
+            {
+                _bodyRotations[indexA] = new Rot(aA);
+                _bodyRotations[indexB] = new Rot(aB);
+            }
         }
 
         /// <summary>

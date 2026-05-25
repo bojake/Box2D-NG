@@ -5240,6 +5240,18 @@ namespace Box2DNG
             }
         }
 
+        // Phase 2.5 Stage B/C helpers — compose the step-start pose with the
+        // within-step delta to get the body's *effective* world state.
+        // Always safe to call: with `UseDeltaPositionTracking == false` the
+        // delta arrays stay at (0, Identity) and the composition collapses
+        // to a direct read; with the flag on, the step-start arrays are
+        // frozen during the sub-step loop and the delta arrays carry the
+        // accumulated IntegratePositions + position-constraint writes.
+        internal Vec2 EffectivePosition(int bodyId)
+            => _bodyPositions[bodyId] + _bodyDeltaPositions[bodyId];
+        internal Rot EffectiveRotation(int bodyId)
+            => Rot.Mul(_bodyDeltaRotations[bodyId], _bodyRotations[bodyId]);
+
         /// <summary>
         /// Phase 2.5 Stage B: commit the within-step deltas accumulated by
         /// <c>IntegratePositions</c> (and, once Stages C+ migrate them,
@@ -6911,19 +6923,44 @@ namespace Box2DNG
                     float newAngleA = bodyA.Transform.Q.Angle - invIA * Vec2.Cross(rA, P);
                     float newAngleB = bodyB.Transform.Q.Angle + invIB * Vec2.Cross(rB, P);
 
-                    // PHASE 2.5 LESSON 4 — inside-loop SetTransform.
-                    // This is the contact NGS pass inside the sub-step loop;
-                    // when `WorldDef.UseDeltaPositionTracking` flips to true,
-                    // these two calls MUST be rewritten to update the delta
-                    // arrays instead (compute newPosA = newCenterA -
-                    // Rot.Mul(newRotA, _bodyLocalCenters[idA]), then
-                    // `_bodyDeltaPositions[idA] = newPosA - _bodyStepStartPositions[idA]`
-                    // and `_bodyDeltaRotations[idA] = Rot.MulT(_bodyStepStartRotations[idA], newRotA)`).
-                    // Leaving body.SetTransformFromCenter here in the migrated
-                    // path would zero the delta and lose every prior
-                    // position-constraint correction in this sub-step.
-                    bodyA.SetTransformFromCenter(newCenterA, newAngleA);
-                    bodyB.SetTransformFromCenter(newCenterB, newAngleB);
+                    // Phase 2.5 Stage K — migrate this inside-loop SetTransform
+                    // off the body setter (which would wipe the accumulated
+                    // delta in flag-on mode) onto a direct delta write.
+                    //
+                    // Flag off: `body.SetTransformFromCenter` writes
+                    // `_bodyPositions[id]` / `_bodyRotations[id]` directly via
+                    // the setter, which also zeros delta — but delta is
+                    // always zero in flag-off mode, so the zero is a no-op
+                    // and the path is byte-identical to pre-Stage-K.
+                    //
+                    // Flag on: compute the new *position* (body origin) from
+                    // newCenter via LocalCenter rotation, then store the
+                    // absolute delta as
+                    //   _bodyDeltaPositions[id] = newPosition - _bodyStepStartPositions[id]
+                    //   _bodyDeltaRotations[id] = Rot.MulT(_bodyStepStartRotations[id], newRot)
+                    // This overwrites the prior delta with the latest
+                    // effective pose — correct because newCenter / newAngle
+                    // were derived from the *current* effective state, so
+                    // the new absolute delta captures every correction
+                    // (IntegratePositions + prior contact / joint passes).
+                    int idA = bodyA.Id;
+                    int idB = bodyB.Id;
+                    if (_def.UseDeltaPositionTracking)
+                    {
+                        Rot newRotA = new Rot(newAngleA);
+                        Rot newRotB = new Rot(newAngleB);
+                        Vec2 newPosA = newCenterA - Rot.Mul(newRotA, _bodyLocalCenters[idA]);
+                        Vec2 newPosB = newCenterB - Rot.Mul(newRotB, _bodyLocalCenters[idB]);
+                        _bodyDeltaPositions[idA] = newPosA - _bodyStepStartPositions[idA];
+                        _bodyDeltaPositions[idB] = newPosB - _bodyStepStartPositions[idB];
+                        _bodyDeltaRotations[idA] = Rot.MulT(_bodyStepStartRotations[idA], newRotA);
+                        _bodyDeltaRotations[idB] = Rot.MulT(_bodyStepStartRotations[idB], newRotB);
+                    }
+                    else
+                    {
+                        bodyA.SetTransformFromCenter(newCenterA, newAngleA);
+                        bodyB.SetTransformFromCenter(newCenterB, newAngleB);
+                    }
                     centerA = newCenterA;
                     centerB = newCenterB;
                 }

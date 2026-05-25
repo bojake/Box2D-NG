@@ -227,11 +227,12 @@ namespace Box2DNG
             // Yes, "Vec2 d = (BodyB.GetWorldCenter() + rB) - (BodyA.GetWorldCenter() + rA);" is inside SolveVelocityConstraints too!
             // So I should recompute d here.
             
-            Rot qA = _bodyRotations[indexA];
-            Rot qB = _bodyRotations[indexB];
+            // Phase 2.5 Stage E — effective rotations + positions.
+            Rot qA = EffectiveRotation(indexA);
+            Rot qB = EffectiveRotation(indexB);
             Vec2 rA = Rot.Mul(qA, joint.LocalAnchorA - _bodyLocalCenters[indexA]);
             Vec2 rB = Rot.Mul(qB, joint.LocalAnchorB - _bodyLocalCenters[indexB]);
-            Vec2 d = (_bodyPositions[indexB] + rB) - (_bodyPositions[indexA] + rA);
+            Vec2 d = (EffectivePosition(indexB) + rB) - (EffectivePosition(indexA) + rA);
             
             // Original code recomputes axis, perp, a1, a2, s1, s2 in SolveVelocityConstraints too.
             // Since bodies move, these change.
@@ -403,19 +404,22 @@ namespace Box2DNG
             int indexA = joint.BodyA;
             int indexB = joint.BodyB;
             
-            ref Vec2 cA = ref _bodyPositions[indexA];
-            float aA = _bodyRotations[indexA].Angle;
-            ref Vec2 cB = ref _bodyPositions[indexB];
-            float aB = _bodyRotations[indexB].Angle;
+            bool useDelta = _def.UseDeltaPositionTracking;
+
+            // Phase 2.5 Stage E — effective reads; writes branch on the flag.
+            Vec2 cA = EffectivePosition(indexA);
+            Vec2 cB = EffectivePosition(indexB);
+            float aA = EffectiveRotation(indexA).Angle;
+            float aB = EffectiveRotation(indexB).Angle;
 
             float mA = _bodyInverseMasses[indexA];
             float mB = _bodyInverseMasses[indexB];
             float iA = _bodyInverseInertias[indexA];
             float iB = _bodyInverseInertias[indexB];
-            
+
             Rot qA = new Rot(aA);
             Rot qB = new Rot(aB);
-            
+
             Vec2 rA = Rot.Mul(qA, joint.LocalAnchorA - _bodyLocalCenters[indexA]);
             Vec2 rB = Rot.Mul(qB, joint.LocalAnchorB - _bodyLocalCenters[indexB]);
             
@@ -495,13 +499,29 @@ namespace Box2DNG
             float LA = impulse.X * s1 + impulse.Y + impulse.Z * a1;
             float LB = impulse.X * s2 + impulse.Y + impulse.Z * a2;
             
-            cA -= mA * P;
+            if (useDelta)
+            {
+                _bodyDeltaPositions[indexA] -= mA * P;
+                _bodyDeltaPositions[indexB] += mB * P;
+            }
+            else
+            {
+                _bodyPositions[indexA] -= mA * P;
+                _bodyPositions[indexB] += mB * P;
+            }
             aA -= iA * LA;
-            cB += mB * P;
             aB += iB * LB;
-            
-            _bodyRotations[indexA] = new Rot(aA);
-            _bodyRotations[indexB] = new Rot(aB);
+
+            if (useDelta)
+            {
+                _bodyDeltaRotations[indexA] = Rot.MulT(_bodyStepStartRotations[indexA], new Rot(aA));
+                _bodyDeltaRotations[indexB] = Rot.MulT(_bodyStepStartRotations[indexB], new Rot(aB));
+            }
+            else
+            {
+                _bodyRotations[indexA] = new Rot(aA);
+                _bodyRotations[indexB] = new Rot(aB);
+            }
         }
     }
 }

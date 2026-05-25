@@ -204,8 +204,11 @@ namespace Box2DNG
             float iA = _bodyInverseInertias[indexA];
             float iB = _bodyInverseInertias[indexB];
             
-            Rot qA = _bodyRotations[indexA];
-            Rot qB = _bodyRotations[indexB];
+            // Phase 2.5 Stage D — effective rotations (compose step-start +
+            // within-step delta). Flag-off: delta is zero so this collapses
+            // to a direct read of _bodyRotations.
+            Rot qA = EffectiveRotation(indexA);
+            Rot qB = EffectiveRotation(indexB);
             Vec2 rA = Rot.Mul(qA, joint.LocalAnchorA - _bodyLocalCenters[indexA]);
             Vec2 rB = Rot.Mul(qB, joint.LocalAnchorB - _bodyLocalCenters[indexB]);
 
@@ -272,7 +275,8 @@ namespace Box2DNG
                 float linearImpulseScale = 0f;
                 if (!joint.LinearSpring.IsZero)
                 {
-                    Vec2 currentDelta = (_bodyPositions[indexB] + rB) - (_bodyPositions[indexA] + rA);
+                    // Phase 2.5 Stage D — effective positions for within-step bias signal.
+                    Vec2 currentDelta = (EffectivePosition(indexB) + rB) - (EffectivePosition(indexA) + rA);
                     Vec2 C = currentDelta - joint.DeltaCenter;
                     linearBias = joint.LinearSpring.BiasRate * C;
                     linearMassScale = joint.LinearSpring.MassScale;
@@ -301,11 +305,13 @@ namespace Box2DNG
             ref RevoluteJointData joint = ref _revoluteJointsData[index];
             int indexA = joint.BodyA;
             int indexB = joint.BodyB;
-            
-            ref Vec2 cA = ref _bodyPositions[indexA];
-            float aA = _bodyRotations[indexA].Angle;
-            ref Vec2 cB = ref _bodyPositions[indexB];
-            float aB = _bodyRotations[indexB].Angle;
+            bool useDelta = _def.UseDeltaPositionTracking;
+
+            // Phase 2.5 Stage D — effective reads; writes branch on the flag.
+            Vec2 cA = EffectivePosition(indexA);
+            Vec2 cB = EffectivePosition(indexB);
+            float aA = EffectiveRotation(indexA).Angle;
+            float aB = EffectiveRotation(indexB).Angle;
 
             Rot qA = new Rot(aA);
             Rot qB = new Rot(aB);
@@ -314,7 +320,7 @@ namespace Box2DNG
             float mB = _bodyInverseMasses[indexB];
             float iA = _bodyInverseInertias[indexA];
             float iB = _bodyInverseInertias[indexB];
-            
+
             // Solve angular limit
             if (joint.EnableLimit)
             {
@@ -359,14 +365,30 @@ namespace Box2DNG
 
                 Vec2 impulse = Solve22(K, -C);
 
-                cA -= mA * impulse;
+                if (useDelta)
+                {
+                    _bodyDeltaPositions[indexA] -= mA * impulse;
+                    _bodyDeltaPositions[indexB] += mB * impulse;
+                }
+                else
+                {
+                    _bodyPositions[indexA] -= mA * impulse;
+                    _bodyPositions[indexB] += mB * impulse;
+                }
                 aA -= iA * Vec2.Cross(rA, impulse);
-                cB += mB * impulse;
                 aB += iB * Vec2.Cross(rB, impulse);
             }
-            
-            _bodyRotations[indexA] = new Rot(aA);
-            _bodyRotations[indexB] = new Rot(aB);
+
+            if (useDelta)
+            {
+                _bodyDeltaRotations[indexA] = Rot.MulT(_bodyStepStartRotations[indexA], new Rot(aA));
+                _bodyDeltaRotations[indexB] = Rot.MulT(_bodyStepStartRotations[indexB], new Rot(aB));
+            }
+            else
+            {
+                _bodyRotations[indexA] = new Rot(aA);
+                _bodyRotations[indexB] = new Rot(aB);
+            }
         }
     }
 }

@@ -68,16 +68,19 @@ namespace Box2DNG
             float iA = _bodyInverseInertias[indexA];
             float iB = _bodyInverseInertias[indexB];
 
-            Vec2 rA = Rot.Mul(_bodyRotations[indexA], joint.LocalAnchorA - _bodyLocalCenters[indexA]);
-            Vec2 rB = Rot.Mul(_bodyRotations[indexB], joint.LocalAnchorB - _bodyLocalCenters[indexB]);
+            // Phase 2.5 Stage F — effective reads.
+            Rot rotA = EffectiveRotation(indexA);
+            Rot rotB = EffectiveRotation(indexB);
+            Vec2 rA = Rot.Mul(rotA, joint.LocalAnchorA - _bodyLocalCenters[indexA]);
+            Vec2 rB = Rot.Mul(rotB, joint.LocalAnchorB - _bodyLocalCenters[indexB]);
 
             ref Vec2 vA = ref _bodyLinearVelocities[indexA];
             ref Vec2 vB = ref _bodyLinearVelocities[indexB];
             ref float wA = ref _bodyAngularVelocities[indexA];
             ref float wB = ref _bodyAngularVelocities[indexB];
 
-            Vec2 d = (_bodyPositions[indexB] + rB) - (_bodyPositions[indexA] + rA);
-            Vec2 axis = Rot.Mul(_bodyRotations[indexA], joint.LocalAxisA);
+            Vec2 d = (EffectivePosition(indexB) + rB) - (EffectivePosition(indexA) + rA);
+            Vec2 axis = Rot.Mul(rotA, joint.LocalAxisA);
             Vec2 perp = new Vec2(-axis.Y, axis.X);
             float s1 = Vec2.Cross(d + rA, perp);
             float s2 = Vec2.Cross(rB, perp);
@@ -183,10 +186,21 @@ namespace Box2DNG
             int indexA = joint.BodyA;
             int indexB = joint.BodyB;
 
-            ref Vec2 cA = ref _bodyPositions[indexA];
-            ref Vec2 cB = ref _bodyPositions[indexB];
-            float aA = _bodyRotations[indexA].Angle;
-            float aB = _bodyRotations[indexB].Angle;
+            bool useDelta = _def.UseDeltaPositionTracking;
+
+            // Phase 2.5 Stage F — effective reads, local mutation; writes at
+            // end branch on the flag. We track cA / cB as local Vec2 values
+            // (not refs) so the perp-then-limit two-phase accumulation flows
+            // through one variable, and only commit the final delta or
+            // step-start update once.
+            Vec2 cA = EffectivePosition(indexA);
+            Vec2 cB = EffectivePosition(indexB);
+            float aA = EffectiveRotation(indexA).Angle;
+            float aB = EffectiveRotation(indexB).Angle;
+            // Track the position correction we've accumulated so the final
+            // write applies the net change.
+            Vec2 cAOriginal = cA;
+            Vec2 cBOriginal = cB;
 
             float mA = _bodyInverseMasses[indexA];
             float mB = _bodyInverseMasses[indexB];
@@ -243,8 +257,8 @@ namespace Box2DNG
                     }
                     else
                     {
-                        _bodyRotations[indexA] = new Rot(aA);
-                        _bodyRotations[indexB] = new Rot(aB);
+                        // Within bounds — commit only the perp correction.
+                        CommitWheelDelta(useDelta, indexA, indexB, cA, cB, cAOriginal, cBOriginal, aA, aB);
                         return;
                     }
 
@@ -260,8 +274,33 @@ namespace Box2DNG
                 }
             }
 
-            _bodyRotations[indexA] = new Rot(aA);
-            _bodyRotations[indexB] = new Rot(aB);
+            CommitWheelDelta(useDelta, indexA, indexB, cA, cB, cAOriginal, cBOriginal, aA, aB);
+        }
+
+        private void CommitWheelDelta(bool useDelta, int indexA, int indexB,
+            Vec2 cA, Vec2 cB, Vec2 cAOriginal, Vec2 cBOriginal, float aA, float aB)
+        {
+            // Apply the net position delta. With flag off, _bodyPositions
+            // moves by (cA - cAOriginal) — algebraically identical to the
+            // pre-Stage-F `cA -= mA * P` write through the `ref Vec2 cA`.
+            // With flag on, _bodyPositions stays at step-start and the
+            // accumulated correction lands in _bodyDeltaPositions.
+            Vec2 deltaA = cA - cAOriginal;
+            Vec2 deltaB = cB - cBOriginal;
+            if (useDelta)
+            {
+                _bodyDeltaPositions[indexA] += deltaA;
+                _bodyDeltaPositions[indexB] += deltaB;
+                _bodyDeltaRotations[indexA] = Rot.MulT(_bodyStepStartRotations[indexA], new Rot(aA));
+                _bodyDeltaRotations[indexB] = Rot.MulT(_bodyStepStartRotations[indexB], new Rot(aB));
+            }
+            else
+            {
+                _bodyPositions[indexA] += deltaA;
+                _bodyPositions[indexB] += deltaB;
+                _bodyRotations[indexA] = new Rot(aA);
+                _bodyRotations[indexB] = new Rot(aB);
+            }
         }
     }
 }

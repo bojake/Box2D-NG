@@ -11,8 +11,12 @@ namespace Box2DNG
                 {
                     return false;
                 }
+                // Phase 2.5 Stage J — TryGetGearCoordinate* is called from
+                // SolveGearJointPositionConstraints (inside the sub-step
+                // loop) — use effective rotations / positions so flag-on
+                // sees within-step delta.
                 ref RevoluteJointData rev = ref _revoluteJointsData[jIndex];
-                coordinate = (_bodyRotations[joint.BodyB].Angle - _bodyRotations[joint.BodyA].Angle) - rev.ReferenceAngle;
+                coordinate = (EffectiveRotation(joint.BodyB).Angle - EffectiveRotation(joint.BodyA).Angle) - rev.ReferenceAngle;
                 return true;
             }
 
@@ -21,10 +25,12 @@ namespace Box2DNG
                 return false;
             }
             ref PrismaticJointData pri = ref _prismaticJointsData[pIndex];
-            Vec2 axis = Rot.Mul(_bodyRotations[joint.BodyA], pri.LocalAxisA);
-            Vec2 rA = Rot.Mul(_bodyRotations[joint.BodyA], pri.LocalAnchorA - _bodyLocalCenters[joint.BodyA]);
-            Vec2 rB = Rot.Mul(_bodyRotations[joint.BodyB], pri.LocalAnchorB - _bodyLocalCenters[joint.BodyB]);
-            Vec2 d = (_bodyPositions[joint.BodyB] + rB) - (_bodyPositions[joint.BodyA] + rA);
+            Rot rotA = EffectiveRotation(joint.BodyA);
+            Rot rotB = EffectiveRotation(joint.BodyB);
+            Vec2 axis = Rot.Mul(rotA, pri.LocalAxisA);
+            Vec2 rA = Rot.Mul(rotA, pri.LocalAnchorA - _bodyLocalCenters[joint.BodyA]);
+            Vec2 rB = Rot.Mul(rotB, pri.LocalAnchorB - _bodyLocalCenters[joint.BodyB]);
+            Vec2 d = (EffectivePosition(joint.BodyB) + rB) - (EffectivePosition(joint.BodyA) + rA);
             coordinate = Vec2.Dot(axis, d);
             return true;
         }
@@ -38,8 +44,9 @@ namespace Box2DNG
                 {
                     return false;
                 }
+                // Phase 2.5 Stage J — effective rotations.
                 ref RevoluteJointData rev = ref _revoluteJointsData[jIndex];
-                coordinate = (_bodyRotations[joint.BodyD].Angle - _bodyRotations[joint.BodyC].Angle) - rev.ReferenceAngle;
+                coordinate = (EffectiveRotation(joint.BodyD).Angle - EffectiveRotation(joint.BodyC).Angle) - rev.ReferenceAngle;
                 return true;
             }
 
@@ -48,10 +55,12 @@ namespace Box2DNG
                 return false;
             }
             ref PrismaticJointData pri = ref _prismaticJointsData[pIndex];
-            Vec2 axis = Rot.Mul(_bodyRotations[joint.BodyC], pri.LocalAxisA);
-            Vec2 rC = Rot.Mul(_bodyRotations[joint.BodyC], pri.LocalAnchorA - _bodyLocalCenters[joint.BodyC]);
-            Vec2 rD = Rot.Mul(_bodyRotations[joint.BodyD], pri.LocalAnchorB - _bodyLocalCenters[joint.BodyD]);
-            Vec2 d = (_bodyPositions[joint.BodyD] + rD) - (_bodyPositions[joint.BodyC] + rC);
+            Rot rotC = EffectiveRotation(joint.BodyC);
+            Rot rotD = EffectiveRotation(joint.BodyD);
+            Vec2 axis = Rot.Mul(rotC, pri.LocalAxisA);
+            Vec2 rC = Rot.Mul(rotC, pri.LocalAnchorA - _bodyLocalCenters[joint.BodyC]);
+            Vec2 rD = Rot.Mul(rotD, pri.LocalAnchorB - _bodyLocalCenters[joint.BodyD]);
+            Vec2 d = (EffectivePosition(joint.BodyD) + rD) - (EffectivePosition(joint.BodyC) + rC);
             coordinate = Vec2.Dot(axis, d);
             return true;
         }
@@ -188,11 +197,14 @@ namespace Box2DNG
                     return;
                 }
 
+                // Phase 2.5 Stage J — effective reads (called from position-constraint pass).
                 ref PrismaticJointData pri = ref _prismaticJointsData[pIndex];
-                Vec2 axis = Rot.Mul(_bodyRotations[joint.BodyA], pri.LocalAxisA);
-                Vec2 rA = Rot.Mul(_bodyRotations[joint.BodyA], pri.LocalAnchorA - _bodyLocalCenters[joint.BodyA]);
-                Vec2 rB = Rot.Mul(_bodyRotations[joint.BodyB], pri.LocalAnchorB - _bodyLocalCenters[joint.BodyB]);
-                Vec2 d = (_bodyPositions[joint.BodyB] + rB) - (_bodyPositions[joint.BodyA] + rA);
+                Rot rotA = EffectiveRotation(joint.BodyA);
+                Rot rotB = EffectiveRotation(joint.BodyB);
+                Vec2 axis = Rot.Mul(rotA, pri.LocalAxisA);
+                Vec2 rA = Rot.Mul(rotA, pri.LocalAnchorA - _bodyLocalCenters[joint.BodyA]);
+                Vec2 rB = Rot.Mul(rotB, pri.LocalAnchorB - _bodyLocalCenters[joint.BodyB]);
+                Vec2 d = (EffectivePosition(joint.BodyB) + rB) - (EffectivePosition(joint.BodyA) + rA);
                 float a1 = Vec2.Cross(d + rA, axis);
                 float a2 = Vec2.Cross(rB, axis);
 
@@ -219,10 +231,12 @@ namespace Box2DNG
                 }
 
                 ref PrismaticJointData pri = ref _prismaticJointsData[pIndex];
-                Vec2 axis = Rot.Mul(_bodyRotations[joint.BodyC], pri.LocalAxisA);
-                Vec2 rC = Rot.Mul(_bodyRotations[joint.BodyC], pri.LocalAnchorA - _bodyLocalCenters[joint.BodyC]);
-                Vec2 rD = Rot.Mul(_bodyRotations[joint.BodyD], pri.LocalAnchorB - _bodyLocalCenters[joint.BodyD]);
-                Vec2 d = (_bodyPositions[joint.BodyD] + rD) - (_bodyPositions[joint.BodyC] + rC);
+                Rot rotC = EffectiveRotation(joint.BodyC);
+                Rot rotD = EffectiveRotation(joint.BodyD);
+                Vec2 axis = Rot.Mul(rotC, pri.LocalAxisA);
+                Vec2 rC = Rot.Mul(rotC, pri.LocalAnchorA - _bodyLocalCenters[joint.BodyC]);
+                Vec2 rD = Rot.Mul(rotD, pri.LocalAnchorB - _bodyLocalCenters[joint.BodyD]);
+                Vec2 d = (EffectivePosition(joint.BodyD) + rD) - (EffectivePosition(joint.BodyC) + rC);
                 float a1 = Vec2.Cross(d + rC, axis);
                 float a2 = Vec2.Cross(rD, axis);
 
@@ -243,15 +257,42 @@ namespace Box2DNG
             float C = (coordA + joint.Ratio * coordB) - joint.Constant;
             float impulse = -C / mass;
 
-            _bodyPositions[joint.BodyA] += _bodyInverseMasses[joint.BodyA] * impulse * jvA;
-            _bodyPositions[joint.BodyB] += _bodyInverseMasses[joint.BodyB] * impulse * jvB;
-            _bodyPositions[joint.BodyC] += _bodyInverseMasses[joint.BodyC] * impulse * jvC;
-            _bodyPositions[joint.BodyD] += _bodyInverseMasses[joint.BodyD] * impulse * jvD;
+            // Phase 2.5 Stage J — writes branch on the flag. Position delta
+            // accumulates; rotation delta is set from the new *effective*
+            // angle (read once via EffectiveRotation, then incremented by
+            // the impulse-derived angle correction).
+            bool useDelta = _def.UseDeltaPositionTracking;
+            Vec2 dPosA = _bodyInverseMasses[joint.BodyA] * impulse * jvA;
+            Vec2 dPosB = _bodyInverseMasses[joint.BodyB] * impulse * jvB;
+            Vec2 dPosC = _bodyInverseMasses[joint.BodyC] * impulse * jvC;
+            Vec2 dPosD = _bodyInverseMasses[joint.BodyD] * impulse * jvD;
+            float newAngleA = EffectiveRotation(joint.BodyA).Angle + _bodyInverseInertias[joint.BodyA] * impulse * jwA;
+            float newAngleB = EffectiveRotation(joint.BodyB).Angle + _bodyInverseInertias[joint.BodyB] * impulse * jwB;
+            float newAngleC = EffectiveRotation(joint.BodyC).Angle + _bodyInverseInertias[joint.BodyC] * impulse * jwC;
+            float newAngleD = EffectiveRotation(joint.BodyD).Angle + _bodyInverseInertias[joint.BodyD] * impulse * jwD;
 
-            _bodyRotations[joint.BodyA] = new Rot(_bodyRotations[joint.BodyA].Angle + _bodyInverseInertias[joint.BodyA] * impulse * jwA);
-            _bodyRotations[joint.BodyB] = new Rot(_bodyRotations[joint.BodyB].Angle + _bodyInverseInertias[joint.BodyB] * impulse * jwB);
-            _bodyRotations[joint.BodyC] = new Rot(_bodyRotations[joint.BodyC].Angle + _bodyInverseInertias[joint.BodyC] * impulse * jwC);
-            _bodyRotations[joint.BodyD] = new Rot(_bodyRotations[joint.BodyD].Angle + _bodyInverseInertias[joint.BodyD] * impulse * jwD);
+            if (useDelta)
+            {
+                _bodyDeltaPositions[joint.BodyA] += dPosA;
+                _bodyDeltaPositions[joint.BodyB] += dPosB;
+                _bodyDeltaPositions[joint.BodyC] += dPosC;
+                _bodyDeltaPositions[joint.BodyD] += dPosD;
+                _bodyDeltaRotations[joint.BodyA] = Rot.MulT(_bodyStepStartRotations[joint.BodyA], new Rot(newAngleA));
+                _bodyDeltaRotations[joint.BodyB] = Rot.MulT(_bodyStepStartRotations[joint.BodyB], new Rot(newAngleB));
+                _bodyDeltaRotations[joint.BodyC] = Rot.MulT(_bodyStepStartRotations[joint.BodyC], new Rot(newAngleC));
+                _bodyDeltaRotations[joint.BodyD] = Rot.MulT(_bodyStepStartRotations[joint.BodyD], new Rot(newAngleD));
+            }
+            else
+            {
+                _bodyPositions[joint.BodyA] += dPosA;
+                _bodyPositions[joint.BodyB] += dPosB;
+                _bodyPositions[joint.BodyC] += dPosC;
+                _bodyPositions[joint.BodyD] += dPosD;
+                _bodyRotations[joint.BodyA] = new Rot(newAngleA);
+                _bodyRotations[joint.BodyB] = new Rot(newAngleB);
+                _bodyRotations[joint.BodyC] = new Rot(newAngleC);
+                _bodyRotations[joint.BodyD] = new Rot(newAngleD);
+            }
         }
     }
 }
