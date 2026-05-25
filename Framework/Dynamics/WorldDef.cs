@@ -35,6 +35,19 @@ namespace Box2DNG
         // in dedicated tests as each consumer is migrated; flip the default
         // once all consumers are green at flag-on.
         public bool UseDeltaPositionTracking { get; private set; }
+        // Phase 2.5 cause #2 seed: when true, `SolvePositionConstraints`
+        // skips the v2-style position-constraint NGS pass for contacts and
+        // relies entirely on the soft-contact bias that `ContactSolver`
+        // computes when `EnableContactSoftening` is true. cpp box2d v3
+        // uses this bias-only model exclusively — its stacks settle from
+        // the bias signal alone, no NGS backstop. Our codebase has both
+        // paths active by default; the NGS pass over-corrects when paired
+        // with sub-stepping + soft springs, blocking the `SubStepCount > 1`
+        // win the Phase 2.5 plan predicted. Flipping this flag on lets a
+        // sample run the cpp v3 path and lets future work tune
+        // `ContactHertz` / `ContactDampingRatio` for adequate settling
+        // without the NGS backstop. Default false (no behaviour change).
+        public bool UseBiasOnlyContacts { get; private set; }
         public bool EnableContactSoftening { get; private set; } = true;
         public bool UseSoftConstraints { get; private set; } = true;
         public bool EnableContactHertzClamp { get; private set; }
@@ -78,6 +91,7 @@ namespace Box2DNG
         public WorldDef EnableContinuousCollision(bool enable) { EnableContinuous = enable; return this; }
         public WorldDef UsePerBodyContinuous(bool enable = true) { UsePerBodyCCD = enable; return this; }
         public WorldDef UseDeltaPositions(bool enable = true) { UseDeltaPositionTracking = enable; return this; }
+        public WorldDef WithBiasOnlyContacts(bool enable = true) { UseBiasOnlyContacts = enable; return this; }
         public WorldDef EnableSoftening(bool enable) { EnableContactSoftening = enable; return this; }
         public WorldDef UseSoftConstraintsSolver(bool enable) { UseSoftConstraints = enable; return this; }
         public WorldDef EnableContactHertzClamping(bool enable) { EnableContactHertzClamp = enable; return this; }

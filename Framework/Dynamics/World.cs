@@ -6864,6 +6864,20 @@ namespace Box2DNG
 
         private void SolvePositionConstraints(System.Collections.Generic.IReadOnlyList<Contact> contacts)
         {
+            // Phase 2.5 cause #2 seed: when `UseBiasOnlyContacts` is set,
+            // skip the v2-style position-constraint NGS pass entirely.
+            // The soft-contact bias that `ContactSolver`/`ContactSolverSimd`
+            // already compute (when `EnableContactSoftening = true`) is the
+            // only position correction — same architecture as cpp box2d v3.
+            // Default false; flipping on may need `ContactHertz` /
+            // `ContactDampingRatio` tuning to recover settling for scenes
+            // calibrated against the NGS backstop. Discussed in BASELINE.md
+            // "causes 2 and 3 still open".
+            if (_def.UseBiasOnlyContacts)
+            {
+                return;
+            }
+
             for (int i = 0; i < contacts.Count; ++i)
             {
                 Contact contact = contacts[i];

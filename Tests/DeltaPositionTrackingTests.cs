@@ -26,6 +26,8 @@ namespace Box2DNG.Tests
             WorldDef def = new WorldDef();
             Assert.IsFalse(def.UseDeltaPositionTracking,
                 "Default must stay off — consumer migration (Stages C+) is not done.");
+            Assert.IsFalse(def.UseBiasOnlyContacts,
+                "Cause #2 seed flag must default off — bias-only model needs contact-softness re-tuning before flipping.");
         }
 
         [TestMethod]
@@ -35,6 +37,53 @@ namespace Box2DNG.Tests
             Assert.IsTrue(def.UseDeltaPositionTracking);
             def.UseDeltaPositions(false);
             Assert.IsFalse(def.UseDeltaPositionTracking);
+
+            def = new WorldDef().WithBiasOnlyContacts(true);
+            Assert.IsTrue(def.UseBiasOnlyContacts);
+            def.WithBiasOnlyContacts(false);
+            Assert.IsFalse(def.UseBiasOnlyContacts);
+        }
+
+        [TestMethod]
+        public void BiasOnlyContacts_BoxOnGround_StaysFinite()
+        {
+            // Phase 2.5 cause #2 seed — pin that the contact NGS skip
+            // doesn't explode for a simple contact scene. With the flag
+            // on, the soft-contact bias is the *only* position correction;
+            // we don't expect Phase-0-tight settling without contact
+            // softness retuning, but the simulation must stay finite and
+            // bounded.
+            World world = new World(new WorldDef()
+                .WithGravity(new Vec2(0f, -10f))
+                .WithBiasOnlyContacts(true));
+            Body ground = world.CreateBody(new BodyDef().AsStatic().At(0f, 0f));
+            ground.CreateFixture(new FixtureDef(new SegmentShape(new Vec2(-10f, 0f), new Vec2(10f, 0f))));
+            Body box = world.CreateBody(new BodyDef().AsDynamic().At(0f, 5f));
+            box.CreateFixture(new FixtureDef(new PolygonShape(new[]
+            {
+                new Vec2(-0.5f, -0.5f), new Vec2(0.5f, -0.5f),
+                new Vec2(0.5f, 0.5f), new Vec2(-0.5f, 0.5f),
+            })).WithDensity(1f));
+
+            for (int i = 0; i < 120; ++i) world.Step(1f / 60f);
+            float y = box.Transform.P.Y;
+            Assert.IsFalse(float.IsNaN(y) || float.IsInfinity(y), $"Box position must stay finite. y={y}");
+            // Without NGS the box may penetrate slightly more under the
+            // existing ContactHertz=120 default; expect it to sit roughly
+            // in [-1, 5] (i.e., it didn't tunnel through and didn't
+            // overshoot into the air either).
+            Assert.IsTrue(y > -1f && y < 5f, $"Box should sit on/near ground without NGS. y={y}");
+        }
+
+        [TestMethod]
+        public void BiasOnlyContacts_FlagOffPathUnchanged()
+        {
+            // Without the bias-only flag, behaviour is byte-identical to
+            // pre-flag: the existing contact NGS pass still runs.
+            (Vec2 a, Vec2 b) = RunBoxOnGround();  // existing helper — flag-on/off pair
+            // The pair already exercises the NGS path; just pin that
+            // adding the new flag (default off) didn't perturb that pair.
+            Assert.IsTrue(a.Y > 0.4f && a.Y < 0.7f, $"flag-off box must still settle near 0.5. y={a.Y}");
         }
 
         [TestMethod]
