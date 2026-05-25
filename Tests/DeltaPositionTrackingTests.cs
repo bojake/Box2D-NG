@@ -339,9 +339,18 @@ namespace Box2DNG.Tests
         }
 
         [TestMethod]
-        public void SoftWeld_AnchoredToStatic_FlagOnHoldsPosition()
+        public void SoftWeld_AnchoredToStatic_FlagOnConstrainsDriftVsFreeFall()
         {
-            // Soft variant — exercises the velocity-constraint bias path.
+            // Phase 2.5 Stage L semantics — with flag-on the DeltaCenter is
+            // re-captured each step at PrepareConstraints, so the spring
+            // bias resists *within-step* drift but does NOT pull bodies
+            // back to the creation pose. Cross-step drift therefore
+            // accumulates under sustained external forces (gravity here).
+            // This matches cpp v3 behaviour and is the trade-off that
+            // unlocks sub-stepping convergence + per-body CCD.
+            //
+            // Pin: the spring still substantially damps drift relative to
+            // free-fall (3 sec @ -10 m/s² ≈ 45 m without a spring).
             World world = new World(new WorldDef()
                 .WithGravity(new Vec2(0f, -10f))
                 .UseDeltaPositions(true));
@@ -354,8 +363,41 @@ namespace Box2DNG.Tests
 
             for (int i = 0; i < 180; ++i) world.Step(1f / 60f);
             float drift = (hanging.Transform.P - new Vec2(0f, 5f)).Length;
-            Assert.IsTrue(drift < 1f,
-                $"Soft weld to static under flag-on must constrain drift. drift={drift}");
+            // 3-sec free-fall under -10 m/s² alone = ~45 m. The spring's
+            // within-step bias should cut that by an order of magnitude.
+            Assert.IsTrue(drift < 5f,
+                $"Soft weld under flag-on must constrain drift well below free-fall. drift={drift}");
+        }
+
+        [TestMethod]
+        public void SoftWeld_AnchoredToStatic_FlagOnMultiSubStep_StaysFinite()
+        {
+            // SubStepCount > 1 with the flag-on path is the headline Phase 2.5
+            // unlock target, but the *relative* drift behaviour vs
+            // SubStepCount=1 isn't a simple win — `b2MakeSoft(hertz, ratio, h)`
+            // makes the spring stiffer per sub-step, which combined with N
+            // velocity-iteration passes can overshoot. The honest pin is
+            // that sub-stepping at flag-on doesn't blow up: the simulation
+            // stays finite and the body doesn't escape sane bounds.
+            float drift = RunSoftWeldDrift(subStepCount: 4);
+            Assert.IsTrue(drift < 50f && !float.IsNaN(drift) && !float.IsInfinity(drift),
+                $"SubStepCount=4 flag-on must stay finite. drift={drift}");
+        }
+
+        private static float RunSoftWeldDrift(int subStepCount)
+        {
+            World world = new World(new WorldDef()
+                .WithGravity(new Vec2(0f, -10f))
+                .UseDeltaPositions(true)
+                .WithSubStepCount(subStepCount));
+            Body anchor = world.CreateBody(new BodyDef().AsStatic().At(0f, 5f));
+            Body hanging = world.CreateBody(new BodyDef().AsDynamic().At(0f, 5f));
+            hanging.CreateFixture(new FixtureDef(new CircleShape(0.5f)).WithDensity(1f));
+            world.CreateJoint(new WeldJointDef(anchor, hanging, new Vec2(0f, 5f))
+                .WithLinearSpring(30f, 0.7f)
+                .WithAngularSpring(30f, 0.7f));
+            for (int i = 0; i < 180; ++i) world.Step(1f / 60f);
+            return (hanging.Transform.P - new Vec2(0f, 5f)).Length;
         }
 
         [TestMethod]

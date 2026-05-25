@@ -34,9 +34,13 @@ namespace Box2DNG.Tests
                 subStepCount = Math.Max(1, n);
             }
             bool perBodyCCD = Environment.GetEnvironmentVariable("B2_PERBODY_CCD") == "1";
+            // Phase 2.5 toggle — flag-on enables the cpp-v3 delta-position
+            // model (Body.Transform = step-start + delta, joints write to
+            // delta arrays, soft-joint DeltaCenter re-captured each Init).
+            bool useDelta = Environment.GetEnvironmentVariable("B2_DELTA") == "1";
 
             Console.WriteLine();
-            Console.WriteLine($"# Sample metrics — SubStepCount={subStepCount}, UsePerBodyCCD={perBodyCCD}");
+            Console.WriteLine($"# Sample metrics — SubStepCount={subStepCount}, UsePerBodyCCD={perBodyCCD}, UseDeltaPositionTracking={useDelta}");
             Console.WriteLine("| Sample | peakV | lateV | peakW | minY | fellThrough |");
             Console.WriteLine("|--------|------:|------:|------:|-----:|------------:|");
 
@@ -44,7 +48,7 @@ namespace Box2DNG.Tests
             {
                 try
                 {
-                    SampleMetrics m = new SampleMetrics(new TunedSample(sample, subStepCount, perBodyCCD));
+                    SampleMetrics m = new SampleMetrics(new TunedSample(sample, subStepCount, perBodyCCD, useDelta));
                     m.Run(Steps);
                     Console.WriteLine(
                         $"| {sample.Name} | {m.PeakLinearSpeed:F2} | {m.LateWindowPeakSpeed:F2} | " +
@@ -57,17 +61,19 @@ namespace Box2DNG.Tests
             }
         }
 
-        /// <summary>Wraps a sample to override its world def's SubStepCount + UsePerBodyCCD.</summary>
+        /// <summary>Wraps a sample to override its world def's SubStepCount + UsePerBodyCCD + UseDeltaPositionTracking.</summary>
         private sealed class TunedSample : ISample
         {
             private readonly ISample _inner;
             private readonly int _subStepCount;
             private readonly bool _perBodyCCD;
-            public TunedSample(ISample inner, int subStepCount, bool perBodyCCD)
+            private readonly bool _useDelta;
+            public TunedSample(ISample inner, int subStepCount, bool perBodyCCD, bool useDelta)
             {
                 _inner = inner;
                 _subStepCount = subStepCount;
                 _perBodyCCD = perBodyCCD;
+                _useDelta = useDelta;
             }
             public string Name => _inner.Name;
             public int SubSteps => _inner.SubSteps;
@@ -75,6 +81,7 @@ namespace Box2DNG.Tests
             {
                 WorldDef def = _inner.CreateWorldDef().WithSubStepCount(_subStepCount);
                 if (_perBodyCCD) def = def.UsePerBodyContinuous();
+                if (_useDelta) def = def.UseDeltaPositions();
                 return def;
             }
             public void Build(World world) => _inner.Build(world);

@@ -173,18 +173,29 @@ namespace Box2DNG
             {
                 Vec2 P = new Vec2(joint.Impulse.X, joint.Impulse.Y);
                 float axialImpulse = joint.MotorImpulse + joint.LimitImpulse;
-                
+
                 _bodyLinearVelocities[indexA] -= mA * P;
                 _bodyAngularVelocities[indexA] -= iA * (Vec2.Cross(rA, P) + axialImpulse);
-                
+
                 _bodyLinearVelocities[indexB] += mB * P;
                 _bodyAngularVelocities[indexB] += iB * (Vec2.Cross(rB, P) + axialImpulse);
             }
-            else 
+            else
             {
                 joint.Impulse = Vec2.Zero;
                 joint.MotorImpulse = 0f;
                 joint.LimitImpulse = 0f;
+            }
+
+            // Phase 2.5 Stage L — flag-gated DeltaCenter re-capture. See the
+            // matching block in InitWeldJointVelocityConstraints for the
+            // full rationale. Flag off keeps the creation-time reference;
+            // flag on re-captures step-start so the velocity-solve bias
+            // sees the within-step anchor drift (delta_B - delta_A) cpp v3
+            // builds on.
+            if (_def.UseDeltaPositionTracking)
+            {
+                joint.DeltaCenter = (_bodyPositions[indexB] + rB) - (_bodyPositions[indexA] + rA);
             }
         }
 

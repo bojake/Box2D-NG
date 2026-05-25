@@ -31,16 +31,29 @@ namespace Box2DNG
             joint.LinearSpring = ResolveJointSpring(joint.LinearHertz, joint.LinearDampingRatio, dt);
             joint.AngularSpring = ResolveJointSpring(joint.AngularHertz, joint.AngularDampingRatio, dt);
 
-            // joint.DeltaCenter is captured ONCE at CreateJoint and stays
-            // fixed — the soft linear spring drives the current anchor delta
-            // back toward this reference. cpp box2d v3 re-captures deltaCenter
-            // each step at Init, but cpp also tracks `b2BodyState.deltaPosition`
-            // during the sub-step solve so the within-step drift signal
-            // (dcB - dcA) is visible at Solve time. Without deltaPosition
-            // tracking in our port, the step-start reference would yield a
-            // zero error signal (bodies haven't moved at Solve time, only
-            // between sub-steps), making the spring inert. We keep creation
-            // reference until Phase 2.5 adds deltaPosition tracking.
+            // joint.DeltaCenter behavior — flag-gated (Phase 2.5 Stage L).
+            //
+            //   Flag off (UseDeltaPositionTracking=false): DeltaCenter is
+            //   captured ONCE at CreateJoint and stays fixed; the soft
+            //   linear spring drives the current anchor delta back toward
+            //   this *creation-time* reference (the existing behaviour;
+            //   byte-identical to pre-Stage-L).
+            //
+            //   Flag on: re-capture DeltaCenter each step at Init to the
+            //   *step-start* anchor offset (`_bodyPositions[id]` is the
+            //   step-start pose at this point — ResetSweeps just snapshotted
+            //   it and IntegratePositions hasn't run yet for this Step).
+            //   Within the sub-step loop the velocity-constraint bias then
+            //   sees `C = (effective_anchor_B - effective_anchor_A) -
+            //   DeltaCenter = delta_B - delta_A`, i.e., the within-step
+            //   drift signal cpp v3 builds on. The flag-on weld joint
+            //   resists within-step motion but allows accumulated cross-
+            //   step drift, matching cpp v3's "the spring fights this
+            //   step, not the simulation history" semantic.
+            if (_def.UseDeltaPositionTracking)
+            {
+                joint.DeltaCenter = (_bodyPositions[indexB] + joint.RB) - (_bodyPositions[indexA] + joint.RA);
+            }
         }
 
         internal void SolveWeldJointVelocityConstraints(int index, float dt)
