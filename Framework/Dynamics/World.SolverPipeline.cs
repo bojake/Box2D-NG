@@ -277,17 +277,27 @@ namespace Box2DNG
 
                         body.Sweep = new Sweep(body.LocalCenter, oldCenter, newCenter, oldAngle, newAngle, 0f);
 
-                        // Phase 2.5 of TIER4_PARITY_PLAN — Stage A: dual-track
-                        // within-step movement into the SoA delta arrays.
-                        // body.Transform still advances above (no consumer
-                        // reads delta yet); this is just bookkeeping so the
-                        // suite stays green while the migration unfolds.
-                        // Stage B+ removes the body.SetTransform call above
-                        // and migrates joint/contact solvers to read
-                        // body.Position + delta.
+                        // Phase 2.5 — Stage A.2: dual-track the within-step
+                        // delta as a *position* delta from the outer-step's
+                        // start, not as accumulated world-center translation.
+                        // Center translation diverges from position
+                        // translation whenever LocalCenter != 0 and rotation
+                        // changes; the loose-box CCD failure mode (test
+                        // reported y=-122) caught that divergence the hard
+                        // way. _bodyStepStartPositions[] is snapshotted at
+                        // ResetSweeps and never moves during sub-steps, so
+                        // (newPosition - stepStart) is the unambiguous
+                        // position offset from step-start. Stage A still
+                        // calls body.SetTransform above, so _bodyPositions
+                        // tracks the live pose and the invariant
+                        // `_bodyPositions[id] == _bodyStepStartPositions[id] + _bodyDeltaPositions[id]`
+                        // holds for LocalCenter == 0; for non-zero LocalCenter
+                        // it holds up to the LocalCenter-rotation offset
+                        // (consumers in Stages B+ that need the precise
+                        // body-origin offset can read the deltas directly).
                         int bodyId = body.Id;
-                        _world._bodyDeltaPositions[bodyId] = _world._bodyDeltaPositions[bodyId] + translation;
-                        _world._bodyDeltaRotations[bodyId] = Rot.Mul(_world._bodyDeltaRotations[bodyId], new Rot(rotation));
+                        _world._bodyDeltaPositions[bodyId] = newPosition - _world._bodyStepStartPositions[bodyId];
+                        _world._bodyDeltaRotations[bodyId] = Rot.MulT(_world._bodyStepStartRotations[bodyId], newRot);
                     }
                 }
             }

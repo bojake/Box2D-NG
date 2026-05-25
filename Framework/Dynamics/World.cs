@@ -108,6 +108,21 @@ namespace Box2DNG
         // body.Transform until the end of the outer step.
         internal Vec2[] _bodyDeltaPositions;
         internal Rot[] _bodyDeltaRotations;
+        // Phase 2.5 Stage A.2: snapshot of the body's position / rotation at
+        // the top of each outer Step. `ResetSweeps` writes them; the rest of
+        // the pipeline never mutates them within a Step. Together with the
+        // delta arrays they let the consumer migration in Stages B–K compute
+        //   stepStart   = _bodyStepStartPositions[id]
+        //   delta       = _bodyDeltaPositions[id]   // = newPos - stepStart
+        //   current     = _bodyPositions[id]        // advances each sub-step today
+        // without needing every consumer to switch storage semantics at once.
+        // While `IntegratePositions` still calls `body.SetTransform` (Stage A
+        // dual-track), `_bodyPositions[id]` advances and equals
+        // `_bodyStepStartPositions[id] + _bodyDeltaPositions[id]`. When the
+        // full migration lands `body.SetTransform` is removed and the
+        // identity above is the *only* way to recover the current pose.
+        internal Vec2[] _bodyStepStartPositions;
+        internal Rot[] _bodyStepStartRotations;
         internal Vec2[] _bodyLinearVelocities;
         internal float[] _bodyAngularVelocities;
         internal float[] _bodyLinearDampings;
@@ -143,12 +158,15 @@ namespace Box2DNG
             int oldCapacityForDeltas = _bodyDeltaRotations?.Length ?? 0;
             Array.Resize(ref _bodyDeltaPositions, newCapacity);
             Array.Resize(ref _bodyDeltaRotations, newCapacity);
+            Array.Resize(ref _bodyStepStartPositions, newCapacity);
+            Array.Resize(ref _bodyStepStartRotations, newCapacity);
             // New Rot slots default to (S=0, C=0) which is NOT identity;
             // fill them so a body inserted at a fresh slot has a sane
-            // (0, identity) delta.
+            // (0, identity) delta and step-start.
             if (newCapacity > oldCapacityForDeltas)
             {
                 Array.Fill(_bodyDeltaRotations, Rot.Identity, oldCapacityForDeltas, newCapacity - oldCapacityForDeltas);
+                Array.Fill(_bodyStepStartRotations, Rot.Identity, oldCapacityForDeltas, newCapacity - oldCapacityForDeltas);
             }
             Array.Resize(ref _bodyLinearVelocities, newCapacity);
             Array.Resize(ref _bodyAngularVelocities, newCapacity);
@@ -192,7 +210,10 @@ namespace Box2DNG
             _bodyRotations = new Rot[_bodyCapacity];
             _bodyDeltaPositions = new Vec2[_bodyCapacity];
             _bodyDeltaRotations = new Rot[_bodyCapacity];
+            _bodyStepStartPositions = new Vec2[_bodyCapacity];
+            _bodyStepStartRotations = new Rot[_bodyCapacity];
             Array.Fill(_bodyDeltaRotations, Rot.Identity);
+            Array.Fill(_bodyStepStartRotations, Rot.Identity);
             _bodyLocalCenters = new Vec2[_bodyCapacity]; // Added
             _bodyLinearVelocities = new Vec2[_bodyCapacity];
             _bodyAngularVelocities = new float[_bodyCapacity];
@@ -539,9 +560,15 @@ namespace Box2DNG
             _bodyPoolIds[id] = poolId;
             // Phase 2.5: initialize within-step delta to (0, identity) so a
             // body inserted mid-frame (or into a slot vacated by a swap-
-            // remove) sees a fresh, post-step-start state.
+            // remove) sees a fresh, post-step-start state. Step-start
+            // snapshot picks up the BodyDef's pose immediately — `_bodyPositions[id]`
+            // / `_bodyRotations[id]` are set by the Body ctor below, but we
+            // mirror what they'll be so a mid-step query sees a consistent
+            // pair (step-start == current == BodyDef.Position).
             _bodyDeltaPositions[id] = Vec2.Zero;
             _bodyDeltaRotations[id] = Rot.Identity;
+            _bodyStepStartPositions[id] = def.Position;
+            _bodyStepStartRotations[id] = def.Rotation;
 
             _bodies.Add(body);
             _bodyCount++;
@@ -630,6 +657,8 @@ namespace Box2DNG
                 _bodyRotations[idToRemove] = _bodyRotations[lastId];
                 _bodyDeltaPositions[idToRemove] = _bodyDeltaPositions[lastId];
                 _bodyDeltaRotations[idToRemove] = _bodyDeltaRotations[lastId];
+                _bodyStepStartPositions[idToRemove] = _bodyStepStartPositions[lastId];
+                _bodyStepStartRotations[idToRemove] = _bodyStepStartRotations[lastId];
                 _bodyLinearVelocities[idToRemove] = _bodyLinearVelocities[lastId];
                 _bodyAngularVelocities[idToRemove] = _bodyAngularVelocities[lastId];
                 _bodyLinearDampings[idToRemove] = _bodyLinearDampings[lastId];
@@ -5202,6 +5231,12 @@ namespace Box2DNG
                 // see the predicted post-integration anchor offset.
                 _bodyDeltaPositions[body.Id] = Vec2.Zero;
                 _bodyDeltaRotations[body.Id] = Rot.Identity;
+                // Stage A.2: snapshot the body's pose at the top of the outer
+                // Step. Stays fixed across all sub-steps so consumers can
+                // recover step-start when the future migration needs it (e.g.
+                // soft-joint DeltaCenter re-captured each Init, cpp v3 style).
+                _bodyStepStartPositions[body.Id] = _bodyPositions[body.Id];
+                _bodyStepStartRotations[body.Id] = _bodyRotations[body.Id];
             }
         }
 
