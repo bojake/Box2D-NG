@@ -23,6 +23,18 @@ namespace Box2DNG
         // v3's `b2SolveContinuous`. Default false during validation; flip to
         // true once all viewer samples settle cleanly with the new path.
         public bool UsePerBodyCCD { get; private set; }
+        // Phase 2.5 Stages B–K of TIER4_PARITY_PLAN: opt-in to cpp v3's
+        // delta-position model where `_bodyPositions[id]` / `_bodyRotations[id]`
+        // stay at the outer-step start throughout the sub-step loop and
+        // `_bodyDeltaPositions[id]` / `_bodyDeltaRotations[id]` carry the
+        // within-step movement. `ApplyBodyDeltas` commits delta back into
+        // the step-start arrays once per outer Step. Joint Solve methods +
+        // contact NGS read `step-start + delta` for the "current effective"
+        // pose. Default false during the consumer migration — the suite
+        // stays byte-identical to Stage A.2 with the flag off. Flip to true
+        // in dedicated tests as each consumer is migrated; flip the default
+        // once all consumers are green at flag-on.
+        public bool UseDeltaPositionTracking { get; private set; }
         public bool EnableContactSoftening { get; private set; } = true;
         public bool UseSoftConstraints { get; private set; } = true;
         public bool EnableContactHertzClamp { get; private set; }
@@ -65,6 +77,7 @@ namespace Box2DNG
         public WorldDef EnableSleeping(bool enable) { EnableSleep = enable; return this; }
         public WorldDef EnableContinuousCollision(bool enable) { EnableContinuous = enable; return this; }
         public WorldDef UsePerBodyContinuous(bool enable = true) { UsePerBodyCCD = enable; return this; }
+        public WorldDef UseDeltaPositions(bool enable = true) { UseDeltaPositionTracking = enable; return this; }
         public WorldDef EnableSoftening(bool enable) { EnableContactSoftening = enable; return this; }
         public WorldDef UseSoftConstraintsSolver(bool enable) { UseSoftConstraints = enable; return this; }
         public WorldDef EnableContactHertzClamping(bool enable) { EnableContactHertzClamp = enable; return this; }

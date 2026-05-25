@@ -6075,6 +6075,9 @@ namespace Box2DNG
             }
 
             Sweep sweep = body.Sweep.Advance(alpha);
+            // PHASE 2.5 LESSON 4 — safe SetTransform: runs in FinalizeStep
+            // (CCD pass), after `ApplyBodyDeltas` will have committed +
+            // cleared the delta arrays. Zeroing delta here is a no-op.
             body.SetTransformFromSweep(sweep);
         }
 
@@ -6235,6 +6238,10 @@ namespace Box2DNG
 
             Vec2 newCenter = oldCenter + dt * body.LinearVelocity;
             float newAngle = oldAngle + dt * body.AngularVelocity;
+            // PHASE 2.5 LESSON 4 — safe SetTransform: this is IntegrateForTOI,
+            // a helper of the legacy ProcessTOI which runs in FinalizeStep
+            // post-`ApplyBodyDeltas`. Delta is zero here; zeroing it again is
+            // a no-op.
             body.SetTransformFromCenter(newCenter, newAngle);
             body.Sweep = new Sweep(body.LocalCenter, oldCenter, newCenter, oldAngle, newAngle, 0f);
         }
@@ -6533,6 +6540,10 @@ namespace Box2DNG
                 float newAngleA = bodyA.Transform.Q.Angle - invIA * Vec2.Cross(rA, P);
                 float newAngleB = bodyB.Transform.Q.Angle + invIB * Vec2.Cross(rB, P);
 
+                // PHASE 2.5 LESSON 4 — safe SetTransform: this is
+                // SolvePositionContact inside the legacy per-contact ProcessTOI
+                // sub-step loop, which runs in FinalizeStep
+                // post-`ApplyBodyDeltas`. Delta is zero here; safe.
                 bodyA.SetTransformFromCenter(newCenterA, newAngleA);
                 bodyB.SetTransformFromCenter(newCenterB, newAngleB);
                 centerA = newCenterA;
@@ -6852,6 +6863,17 @@ namespace Box2DNG
                     float newAngleA = bodyA.Transform.Q.Angle - invIA * Vec2.Cross(rA, P);
                     float newAngleB = bodyB.Transform.Q.Angle + invIB * Vec2.Cross(rB, P);
 
+                    // PHASE 2.5 LESSON 4 — inside-loop SetTransform.
+                    // This is the contact NGS pass inside the sub-step loop;
+                    // when `WorldDef.UseDeltaPositionTracking` flips to true,
+                    // these two calls MUST be rewritten to update the delta
+                    // arrays instead (compute newPosA = newCenterA -
+                    // Rot.Mul(newRotA, _bodyLocalCenters[idA]), then
+                    // `_bodyDeltaPositions[idA] = newPosA - _bodyStepStartPositions[idA]`
+                    // and `_bodyDeltaRotations[idA] = Rot.MulT(_bodyStepStartRotations[idA], newRotA)`).
+                    // Leaving body.SetTransformFromCenter here in the migrated
+                    // path would zero the delta and lose every prior
+                    // position-constraint correction in this sub-step.
                     bodyA.SetTransformFromCenter(newCenterA, newAngleA);
                     bodyB.SetTransformFromCenter(newCenterB, newAngleB);
                     centerA = newCenterA;

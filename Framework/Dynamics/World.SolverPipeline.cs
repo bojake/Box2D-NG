@@ -273,6 +273,15 @@ namespace Box2DNG
                         float newAngle = oldAngle + rotation;
                         Rot newRot = new Rot(newAngle);
                         Vec2 newPosition = newCenter - Rot.Mul(newRot, body.LocalCenter);
+                        // PHASE 2.5 LESSON 4 — inside-loop SetTransform.
+                        // When `WorldDef.UseDeltaPositionTracking` flips to
+                        // true, this call MUST be removed. body.SetTransform
+                        // zeros the delta arrays (so external setters keep
+                        // "this IS the new pose" semantics); leaving this in
+                        // would wipe every sub-step's accumulated delta. The
+                        // delta-write a few lines below already encodes the
+                        // newPosition / newRot, so removing this call is the
+                        // only line that needs to change in IntegratePositions.
                         body.SetTransform(newPosition, newRot);
 
                         body.Sweep = new Sweep(body.LocalCenter, oldCenter, newCenter, oldAngle, newAngle, 0f);
