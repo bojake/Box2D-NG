@@ -46,6 +46,11 @@ namespace Box2DNG.Tests
 
             foreach (ISample sample in SampleCatalog.All)
             {
+                // Print the sample name BEFORE running so a hung sample is
+                // immediately identifiable. Stderr so it isn't interleaved
+                // with the table emitted on stdout.
+                Console.Error.WriteLine($"[starting] {sample.Name}");
+                var sw = System.Diagnostics.Stopwatch.StartNew();
                 try
                 {
                     SampleMetrics m = new SampleMetrics(new TunedSample(sample, subStepCount, perBodyCCD, useDelta));
@@ -58,6 +63,7 @@ namespace Box2DNG.Tests
                 {
                     Console.WriteLine($"| {sample.Name} | EXCEPTION | | | | | {ex.Message} |");
                 }
+                Console.Error.WriteLine($"[done {sw.Elapsed.TotalSeconds:F2}s] {sample.Name}");
             }
         }
 

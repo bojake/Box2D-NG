@@ -6955,6 +6955,22 @@ namespace Box2DNG
                         _bodyDeltaPositions[idB] = newPosB - _bodyStepStartPositions[idB];
                         _bodyDeltaRotations[idA] = Rot.MulT(_bodyStepStartRotations[idA], newRotA);
                         _bodyDeltaRotations[idB] = Rot.MulT(_bodyStepStartRotations[idB], newRotB);
+                        // Phase 2.5 Stage K bug fix — match the flag-off
+                        // SetTransformFromCenter Sweep side-effect: collapse
+                        // the body's Sweep to a zero-length segment at the
+                        // NGS-corrected pose. Without this, IntegratePositions'
+                        // earlier Sweep write (with C0 = pre-integration
+                        // center, C = newCenter) survives unchanged, and
+                        // SyncSweeps later preserves the stale C0. Legacy
+                        // ProcessTOI then sees ~2m swept trajectories per step
+                        // for fast bodies (e.g., the AddPair bullet at
+                        // v=120 m/s), computes tiny TOI fractions, and the
+                        // per-contact sub-step loop generates an extreme
+                        // impulse chain that drives small bodies' velocity
+                        // updates to NaN within ~16 outer steps. Caught by
+                        // bisecting AddPair flag-on N=1 hang.
+                        bodyA.Sweep = new Sweep(bodyA.LocalCenter, newCenterA, newCenterA, newAngleA, newAngleA, 0f);
+                        bodyB.Sweep = new Sweep(bodyB.LocalCenter, newCenterB, newCenterB, newAngleB, newAngleB, 0f);
                     }
                     else
                     {
