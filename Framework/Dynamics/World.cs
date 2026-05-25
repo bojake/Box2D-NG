@@ -5240,6 +5240,28 @@ namespace Box2DNG
             }
         }
 
+        /// <summary>
+        /// Phase 2.5 Stage B: commit the within-step deltas accumulated by
+        /// <c>IntegratePositions</c> (and, once Stages C+ migrate them,
+        /// joint + contact position-constraint passes) back into the
+        /// step-start arrays. Called once per outer Step from
+        /// <see cref="SolverPipeline.Step"/> when
+        /// <see cref="WorldDef.UseDeltaPositionTracking"/> is true; with the
+        /// flag off this is a no-op (delta stays at <c>(0, Identity)</c>
+        /// throughout the sub-step loop because <c>IntegratePositions</c>
+        /// uses <c>body.SetTransform</c> which wipes delta).
+        /// </summary>
+        internal void ApplyBodyDeltas()
+        {
+            for (int i = 0; i < _bodyCount; ++i)
+            {
+                _bodyPositions[i] = _bodyPositions[i] + _bodyDeltaPositions[i];
+                _bodyRotations[i] = Rot.Mul(_bodyDeltaRotations[i], _bodyRotations[i]);
+                _bodyDeltaPositions[i] = Vec2.Zero;
+                _bodyDeltaRotations[i] = Rot.Identity;
+            }
+        }
+
         internal void RaiseBodyEvents()
         {
             if (_bodies.Count == 0)

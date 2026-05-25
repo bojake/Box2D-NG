@@ -73,6 +73,14 @@ namespace Box2DNG
                     IntegratePositions(h);
                     SolvePositionConstraints(h);
                 }
+                // Phase 2.5 Stage B: commit accumulated within-step delta
+                // back into the step-start arrays before SyncSweeps so the
+                // sweep capture + CCD pass see the post-step pose. No-op
+                // when the flag is off (delta is always zero in that path).
+                if (_world._def.UseDeltaPositionTracking)
+                {
+                    _world.ApplyBodyDeltas();
+                }
                 _world.RaiseContactImpulseEvents();
                 _world.SyncSweeps();
                 FinalizeStep(timeStep);
@@ -273,40 +281,37 @@ namespace Box2DNG
                         float newAngle = oldAngle + rotation;
                         Rot newRot = new Rot(newAngle);
                         Vec2 newPosition = newCenter - Rot.Mul(newRot, body.LocalCenter);
-                        // PHASE 2.5 LESSON 4 — inside-loop SetTransform.
-                        // When `WorldDef.UseDeltaPositionTracking` flips to
-                        // true, this call MUST be removed. body.SetTransform
-                        // zeros the delta arrays (so external setters keep
-                        // "this IS the new pose" semantics); leaving this in
-                        // would wipe every sub-step's accumulated delta. The
-                        // delta-write a few lines below already encodes the
-                        // newPosition / newRot, so removing this call is the
-                        // only line that needs to change in IntegratePositions.
-                        body.SetTransform(newPosition, newRot);
+
+                        // Phase 2.5 Stage B — branch on `UseDeltaPositionTracking`:
+                        //   flag off (default): `body.SetTransform` advances
+                        //     `_bodyPositions[id]` / `_bodyRotations[id]` to
+                        //     newPosition / newRot AND its setter zeros the
+                        //     delta arrays. The whole sub-step loop runs with
+                        //     delta == (0, Identity), so `Body.Transform.get`
+                        //     composes to a direct read of the step-start
+                        //     arrays — byte-identical to pre-Stage-B behavior.
+                        //   flag on: skip `body.SetTransform`; write delta as
+                        //     (newPosition - stepStart). `_bodyPositions[id]`
+                        //     stays at step-start for the entire sub-step loop,
+                        //     and `ApplyBodyDeltas` (called from `Step` after
+                        //     the loop) commits the accumulated delta. Joint
+                        //     / contact-solver consumers that still read
+                        //     `_bodyPositions[id]` directly will see stale
+                        //     step-start data until they are migrated to add
+                        //     the delta (Stages C+) — flag-on tests must
+                        //     avoid those code paths until then.
+                        int bodyId = body.Id;
+                        if (_world._def.UseDeltaPositionTracking)
+                        {
+                            _world._bodyDeltaPositions[bodyId] = newPosition - _world._bodyStepStartPositions[bodyId];
+                            _world._bodyDeltaRotations[bodyId] = Rot.MulT(_world._bodyStepStartRotations[bodyId], newRot);
+                        }
+                        else
+                        {
+                            body.SetTransform(newPosition, newRot);
+                        }
 
                         body.Sweep = new Sweep(body.LocalCenter, oldCenter, newCenter, oldAngle, newAngle, 0f);
-
-                        // Phase 2.5 — Stage A.2: dual-track the within-step
-                        // delta as a *position* delta from the outer-step's
-                        // start, not as accumulated world-center translation.
-                        // Center translation diverges from position
-                        // translation whenever LocalCenter != 0 and rotation
-                        // changes; the loose-box CCD failure mode (test
-                        // reported y=-122) caught that divergence the hard
-                        // way. _bodyStepStartPositions[] is snapshotted at
-                        // ResetSweeps and never moves during sub-steps, so
-                        // (newPosition - stepStart) is the unambiguous
-                        // position offset from step-start. Stage A still
-                        // calls body.SetTransform above, so _bodyPositions
-                        // tracks the live pose and the invariant
-                        // `_bodyPositions[id] == _bodyStepStartPositions[id] + _bodyDeltaPositions[id]`
-                        // holds for LocalCenter == 0; for non-zero LocalCenter
-                        // it holds up to the LocalCenter-rotation offset
-                        // (consumers in Stages B+ that need the precise
-                        // body-origin offset can read the deltas directly).
-                        int bodyId = body.Id;
-                        _world._bodyDeltaPositions[bodyId] = newPosition - _world._bodyStepStartPositions[bodyId];
-                        _world._bodyDeltaRotations[bodyId] = Rot.MulT(_world._bodyStepStartRotations[bodyId], newRot);
                     }
                 }
             }

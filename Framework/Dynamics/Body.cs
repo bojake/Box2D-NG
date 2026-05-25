@@ -10,31 +10,56 @@ namespace Box2DNG
 
         public BodyDef Definition { get; }
         
+        // Phase 2.5 Stage B: Body.Transform always returns the *effective*
+        // pose = step-start (`_bodyPositions[Id]`) composed with the
+        // within-step delta (`_bodyDeltaPositions[Id]`). With
+        // `WorldDef.UseDeltaPositionTracking == false` (the default) the
+        // delta arrays stay at (0, Identity) throughout the sub-step loop
+        // — `IntegratePositions` calls `body.SetTransform` which writes
+        // step-start AND zeros the delta — so the composition degenerates
+        // to a direct read and the suite is byte-identical to today. With
+        // the flag on, `IntegratePositions` skips `body.SetTransform` and
+        // the delta arrays carry within-step movement; `ApplyBodyDeltas`
+        // commits + clears them once per outer Step. Either way external
+        // callers see "current world pose."
         public Transform Transform
         {
-            get => new Transform(_world._bodyPositions[Id], _world._bodyRotations[Id]);
+            get => new Transform(
+                _world._bodyPositions[Id] + _world._bodyDeltaPositions[Id],
+                Rot.Mul(_world._bodyDeltaRotations[Id], _world._bodyRotations[Id]));
             private set
             {
-                // SetTransform should be used, but for internal setting:
+                // Setting Transform lands at step-start and zeros the delta
+                // — callers (`SetTransform`, `SetTransformFromCenter`,
+                // `SetTransformFromSweep`) all assume "this IS the new pose,
+                // no pending corrections." Inside-the-solve writes that
+                // need to land in the delta arrays must go through World-
+                // level mutation paths (see the contact NGS / joint
+                // position-constraint Stages C+).
                 _world._bodyPositions[Id] = value.P;
                 _world._bodyRotations[Id] = value.Q;
+                _world._bodyDeltaPositions[Id] = Vec2.Zero;
+                _world._bodyDeltaRotations[Id] = Rot.Identity;
             }
         }
 
-        public Rot Rotation => _world._bodyRotations[Id];
+        public Rot Rotation => Rot.Mul(_world._bodyDeltaRotations[Id], _world._bodyRotations[Id]);
 
 
-        
-        public BodyType Type 
-        { 
+        public BodyType Type
+        {
             get => _world._bodyTypes[Id];
             private set => _world._bodyTypes[Id] = value;
         }
 
         public Vec2 Position
         {
-            get => _world._bodyPositions[Id];
-            set => _world._bodyPositions[Id] = value;
+            get => _world._bodyPositions[Id] + _world._bodyDeltaPositions[Id];
+            set
+            {
+                _world._bodyPositions[Id] = value;
+                _world._bodyDeltaPositions[Id] = Vec2.Zero;
+            }
         }
 
         public Vec2 LinearVelocity
