@@ -422,6 +422,29 @@ blocker for the cause investigation.
   bias-only default flip becomes the realistic target.
 - Cause #3 stays open and needs a separate investigation tracked
   against the `h`-scaling math in `Softness.Make`.
-- New cause #5: CircleStress regression at flag-on N=1 (no bias).
-  Recovers partially under bias-only (89.25 → 81.38). Likely same root
-  as cause #3 family but worth a focused probe.
+- ~~New cause #5: CircleStress regression at flag-on N=1 (no bias).~~
+  **Resolved by cause #2 — there is no separate cause #5.** A focused
+  bisect probe (`Tests/CircleStressBisectProbe.cs`) with fresh sample
+  instances (avoiding the catalog-singleton RNG leak) shows:
+
+  ```
+  CircleStress fresh-instance lateV:
+    off+N1            64.26
+    on+N1   (NGS)     89.25   Δ +24.99   ← cause #2 manifesting
+    on+N1+bias-only   56.27   Δ -7.99    ← bias-only IMPROVES over off
+  ```
+
+  The original full-catalog probe reported on+N1 at 73.79 (Δ +9.53), but
+  the bisect with `new CircleStressSample()` per probe shows the true
+  flag-on-NGS regression is +24.99 — the catalog singleton's shared
+  `Random(1234)` had advanced between probes, masking severity. The
+  bisect also shows the bias-only path turns CircleStress into a clean
+  win (−7.99 vs flag-off), strengthening the case for cause #2 being
+  the primary lever. The divergence at step 32 is a different settling
+  trajectory under NGS during the initial impact phase, not an
+  explosion or fall-through — the same v2-NGS over-correction pattern
+  that drives Pyramid/TheoJansen/EdgeShapes.
+
+  Confirms: task #83 (fixture singleton fix) is more important than it
+  looked — full-catalog probe numbers should not be trusted absolute,
+  only as qualitative ordinals.
