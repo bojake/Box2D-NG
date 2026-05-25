@@ -123,14 +123,205 @@ namespace Box2DNG.Tests
             Assert.AreEqual(0f, world._bodyDeltaPositions[body.Id].Y, 1e-6f);
         }
 
-        private static float RunFreeFall(bool useDelta)
+        [TestMethod]
+        public void FlagOn_SetTransformWipesBothDeltas()
+        {
+            // Public Body.SetTransform overload — pins that both delta
+            // arrays are zeroed AND the readback matches what was set.
+            // Catches the case where someone migrates one getter/setter
+            // pair but not the other.
+            World world = new World(new WorldDef().UseDeltaPositions(true));
+            Body body = world.CreateBody(new BodyDef().AsDynamic().At(0f, 0f));
+            body.SetTransform(new Vec2(3f, 4f), 0.5f);
+            Assert.AreEqual(3f, body.Transform.P.X, 1e-6f);
+            Assert.AreEqual(4f, body.Transform.P.Y, 1e-6f);
+            Assert.AreEqual(0.5f, body.Transform.Q.Angle, 1e-5f);
+            Assert.AreEqual(0f, world._bodyDeltaPositions[body.Id].X, 1e-6f);
+            Assert.AreEqual(0f, world._bodyDeltaPositions[body.Id].Y, 1e-6f);
+            Assert.AreEqual(1f, world._bodyDeltaRotations[body.Id].C, 1e-6f);
+            Assert.AreEqual(0f, world._bodyDeltaRotations[body.Id].S, 1e-6f);
+        }
+
+        [TestMethod]
+        public void FreeFall_MultiSubStep_FlagOnMatchesFlagOff()
+        {
+            // The flag's actual unlock target is SubStepCount > 1 with the
+            // delta-position model. For a body with no joints / no contacts
+            // the result must still match flag-off byte-for-byte (to within
+            // float rounding), because IntegratePositions's delta-write at
+            // each sub-step encodes the absolute newPosition relative to
+            // step-start — accumulation across sub-steps is implicit in
+            // _bodyDeltaPositions[] = newPosition - stepStart.
+            float yOff = RunFreeFall(useDelta: false, subStepCount: 4);
+            float yOn = RunFreeFall(useDelta: true, subStepCount: 4);
+            Assert.AreEqual(yOff, yOn, 1e-3f,
+                $"Free-fall × subStepCount=4 must match across the flag. " +
+                $"off={yOff} on={yOn}");
+        }
+
+        [TestMethod]
+        public void SpinningBody_FlagOnMatchesFlagOff()
+        {
+            // Pure angular velocity, no gravity. Exercises the
+            // _bodyDeltaRotations math that free-fall doesn't touch.
+            // body.Transform.Q.Angle should match between flag states
+            // after the same number of steps.
+            float angleOff = RunSpinning(useDelta: false);
+            float angleOn = RunSpinning(useDelta: true);
+            Assert.AreEqual(angleOff, angleOn, 1e-4f,
+                $"Spinning trajectory must match across the flag. " +
+                $"off={angleOff} on={angleOn}");
+        }
+
+        [TestMethod]
+        public void OffCenterMass_SpinningWithGravity_FlagOnMatchesFlagOff()
+        {
+            // The Stage A.2 fix was specifically about LocalCenter != 0 +
+            // rotating bodies — under those conditions the body-origin
+            // translation (what `_bodyPositions[id]` should advance by) is
+            // NOT equal to the world-center translation. Use an asymmetric
+            // polygon whose centroid lives away from the body's origin and
+            // give it both gravity and an angular velocity, so both factors
+            // contribute to the position delta.
+            float yOff = RunOffCenterSpinning(useDelta: false);
+            float yOn = RunOffCenterSpinning(useDelta: true);
+            Assert.AreEqual(yOff, yOn, 1e-3f,
+                $"Off-center spinning body trajectory must match. " +
+                $"off={yOff} on={yOn}");
+        }
+
+        [TestMethod]
+        public void MultipleBodies_FlagOn_AllDeltasClearAfterStep()
+        {
+            // Three independent bodies, all under gravity. Each body's
+            // delta arrays must be (0, Identity) after every step's
+            // ApplyBodyDeltas commit, regardless of their relative
+            // positions / sleep states.
+            World world = new World(new WorldDef()
+                .WithGravity(new Vec2(0f, -10f))
+                .UseDeltaPositions(true));
+            Body a = world.CreateBody(new BodyDef().AsDynamic().At(-5f, 50f));
+            a.CreateFixture(new FixtureDef(new CircleShape(0.5f)).WithDensity(1f));
+            Body b = world.CreateBody(new BodyDef().AsDynamic().At(0f, 30f));
+            b.CreateFixture(new FixtureDef(new CircleShape(0.5f)).WithDensity(1f));
+            Body c = world.CreateBody(new BodyDef().AsDynamic().At(5f, 10f));
+            c.CreateFixture(new FixtureDef(new CircleShape(0.5f)).WithDensity(1f));
+
+            for (int step = 0; step < 5; ++step)
+            {
+                world.Step(1f / 60f);
+                foreach (Body body in new[] { a, b, c })
+                {
+                    Assert.AreEqual(0f, world._bodyDeltaPositions[body.Id].X, 1e-6f,
+                        $"step {step} body {body.Id}: deltaPos.X not cleared");
+                    Assert.AreEqual(0f, world._bodyDeltaPositions[body.Id].Y, 1e-6f,
+                        $"step {step} body {body.Id}: deltaPos.Y not cleared");
+                    Assert.AreEqual(1f, world._bodyDeltaRotations[body.Id].C, 1e-6f,
+                        $"step {step} body {body.Id}: deltaRot.C != 1");
+                    Assert.AreEqual(0f, world._bodyDeltaRotations[body.Id].S, 1e-6f,
+                        $"step {step} body {body.Id}: deltaRot.S != 0");
+                }
+            }
+        }
+
+        [TestMethod]
+        public void Determinism_FlagOn_SameRunSameResult()
+        {
+            // Identical scene built twice with flag on should yield bit-
+            // identical body positions after the same number of steps.
+            // Catches any non-deterministic source introduced by the delta
+            // bookkeeping.
+            float ySpinA = RunOffCenterSpinning(useDelta: true);
+            float ySpinB = RunOffCenterSpinning(useDelta: true);
+            Assert.AreEqual(ySpinA, ySpinB,
+                $"Same scene twice → same result. a={ySpinA} b={ySpinB}");
+        }
+
+        [TestMethod]
+        public void StepStartArrays_SnapshotMatchesPreStepPosition()
+        {
+            // The next step's ResetSweeps captures _bodyStepStartPositions[]
+            // from _bodyPositions[] *at the top of that step* — i.e., the
+            // committed pose from the previous step. Pin that contract:
+            // record the body's position immediately *before* a Step call,
+            // then check that _bodyStepStartPositions matches it after the
+            // Step (ResetSweeps inside that Step did the snapshot).
+            //
+            // Future joint-migration code that uses
+            // `_bodyStepStartPositions[id]` for the cpp-v3 "deltaCenter"
+            // reference depends on this — if step-start ever diverged from
+            // the pre-step pose, the bias signal would compute against
+            // stale data.
+            World world = new World(new WorldDef()
+                .WithGravity(new Vec2(0f, -10f))
+                .UseDeltaPositions(true));
+            Body body = world.CreateBody(new BodyDef().AsDynamic().At(0f, 50f));
+            body.CreateFixture(new FixtureDef(new CircleShape(0.5f)).WithDensity(1f));
+
+            for (int i = 0; i < 5; ++i)
+            {
+                // Capture the body's pose BEFORE the step. ResetSweeps
+                // inside the step will snapshot this exact value.
+                Vec2 preStepPosition = world._bodyPositions[body.Id];
+                Rot preStepRotation = world._bodyRotations[body.Id];
+                world.Step(1f / 60f);
+                Assert.AreEqual(preStepPosition.X,
+                    world._bodyStepStartPositions[body.Id].X, 1e-6f,
+                    $"step {i}: stepStart.X != preStep.X");
+                Assert.AreEqual(preStepPosition.Y,
+                    world._bodyStepStartPositions[body.Id].Y, 1e-6f,
+                    $"step {i}: stepStart.Y != preStep.Y");
+                Assert.AreEqual(preStepRotation.S,
+                    world._bodyStepStartRotations[body.Id].S, 1e-6f,
+                    $"step {i}: stepStartRot.S != preStepRot.S");
+                Assert.AreEqual(preStepRotation.C,
+                    world._bodyStepStartRotations[body.Id].C, 1e-6f,
+                    $"step {i}: stepStartRot.C != preStepRot.C");
+            }
+        }
+
+        private static float RunFreeFall(bool useDelta, int subStepCount = 1)
         {
             World world = new World(new WorldDef()
                 .WithGravity(new Vec2(0f, -10f))
-                .UseDeltaPositions(useDelta));
+                .UseDeltaPositions(useDelta)
+                .WithSubStepCount(subStepCount));
             Body body = world.CreateBody(new BodyDef().AsDynamic().At(0f, 100f));
             body.CreateFixture(new FixtureDef(new CircleShape(0.5f)).WithDensity(1f));
             for (int i = 0; i < 60; ++i) world.Step(1f / 60f);
+            return body.Transform.P.Y;
+        }
+
+        private static float RunSpinning(bool useDelta)
+        {
+            World world = new World(new WorldDef()
+                .WithGravity(Vec2.Zero)
+                .UseDeltaPositions(useDelta));
+            Body body = world.CreateBody(new BodyDef().AsDynamic().At(0f, 0f));
+            body.CreateFixture(new FixtureDef(new CircleShape(0.5f)).WithDensity(1f));
+            body.AngularVelocity = 2f;  // 2 rad/s
+            for (int i = 0; i < 30; ++i) world.Step(1f / 60f);
+            return body.Transform.Q.Angle;
+        }
+
+        private static float RunOffCenterSpinning(bool useDelta)
+        {
+            // Right-leaning triangle — centroid shifted right of the body
+            // origin. Combined with angular velocity + gravity this fully
+            // exercises the Stage A.2 (newPosition = newCenter - rot*LocalCenter)
+            // math.
+            World world = new World(new WorldDef()
+                .WithGravity(new Vec2(0f, -10f))
+                .UseDeltaPositions(useDelta));
+            Body body = world.CreateBody(new BodyDef().AsDynamic().At(0f, 50f));
+            body.CreateFixture(new FixtureDef(new PolygonShape(new[]
+            {
+                new Vec2(0f, 0f),
+                new Vec2(2f, 0f),
+                new Vec2(1f, 1f),
+            })).WithDensity(1f));
+            body.AngularVelocity = 3f;  // 3 rad/s
+            for (int i = 0; i < 30; ++i) world.Step(1f / 60f);
             return body.Transform.P.Y;
         }
     }

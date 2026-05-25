@@ -5250,13 +5250,39 @@ namespace Box2DNG
         /// flag off this is a no-op (delta stays at <c>(0, Identity)</c>
         /// throughout the sub-step loop because <c>IntegratePositions</c>
         /// uses <c>body.SetTransform</c> which wipes delta).
+        ///
+        /// **Rotation normalization.** The naive composition
+        /// <c>_bodyRotations = Mul(delta, _bodyRotations)</c> exponentially
+        /// amplifies magnitude drift across outer steps: with our
+        /// <c>delta = MulT(stepStart, newRot)</c> formula,
+        /// <c>|delta| = |stepStart|·|newRot|</c>, and
+        /// <c>Mul(delta, _bodyRotations)</c> gives magnitude
+        /// <c>|delta|·|_bodyRotations| = |stepStart|²·|newRot|</c>. Each
+        /// step squares the existing magnitude error, so a 1-ulp drift
+        /// becomes catastrophic in ~30 steps (rotation magnitude grew to
+        /// 15× during the off-center-spinning probe). Re-normalize here
+        /// to clamp magnitude back to 1 — cpp v3 avoids this by
+        /// integrating deltaRotation from identity each step instead of
+        /// deriving it from stepStart, but normalization is the smaller
+        /// surgery for the Stage B/C scope.
         /// </summary>
         internal void ApplyBodyDeltas()
         {
             for (int i = 0; i < _bodyCount; ++i)
             {
                 _bodyPositions[i] = _bodyPositions[i] + _bodyDeltaPositions[i];
-                _bodyRotations[i] = Rot.Mul(_bodyDeltaRotations[i], _bodyRotations[i]);
+                Rot composed = Rot.Mul(_bodyDeltaRotations[i], _bodyRotations[i]);
+                float magSq = composed.S * composed.S + composed.C * composed.C;
+                // Skip the sqrt when magnitude is already unit-ish — the
+                // common case at flag-off (where delta is always identity)
+                // and for slow-rotating bodies. Threshold ~1e-6 catches
+                // accumulated drift well before it would compound.
+                if (MathF.Abs(magSq - 1f) > 1e-6f)
+                {
+                    float invMag = 1f / MathF.Sqrt(magSq);
+                    composed = new Rot(composed.S * invMag, composed.C * invMag);
+                }
+                _bodyRotations[i] = composed;
                 _bodyDeltaPositions[i] = Vec2.Zero;
                 _bodyDeltaRotations[i] = Rot.Identity;
             }
