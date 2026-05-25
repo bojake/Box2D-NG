@@ -708,3 +708,100 @@ That would keep cpp v3's bias-only speed on most contacts but engage
 the NGS safety net when soft-spring tuning hits resonance. Not pursued
 now — current safe corners are adequate and the architecture would
 need careful design.
+
+## Task #81: cause #3 reframed — not a flag-on bug (2026-05-25)
+
+`Tests/PyramidSubStepProbe.cs` scans Pyramid at SubStepCount ∈ {1, 2, 3,
+4, 6, 8} for three configurations (flag-off, flag-on + NGS, flag-on +
+bias-only) under both our current defaults (H120r1) and cpp v3's
+defaults (H30r10).
+
+### Headline: the sub-step breakage exists in the flag-OFF path too
+
+```
+At current defaults H120r1:
+  N  │ off lateV   off FT  │ on+NGS lateV  on+NGS FT  │ on+bias lateV  on+bias FT
+  1  │   12.62        0    │     4.08          0      │    2.29            0
+  2  │   96.66       85    │    91.33         78      │  110.07           71
+  3  │  113.82      188    │   112.53        185      │  110.39          183
+  4  │   99.23      189    │   101.94        185      │  107.00          187
+  6  │  106.04      184    │   103.57        188      │  117.13          189
+  8  │  108.86      188    │   108.86        188      │  109.39          183
+```
+
+The flag-OFF baseline (no Phase 2.5 anything) catastrophically regresses
+at N≥2 with our default (H120r1) — lateV jumps from 12.62 to 96.66, FT
+from 0 to 85 boxes. This isn't a Phase 2.5 bug; it's a pre-existing
+configuration mismatch that nobody noticed because `WorldDef.SubStepCount`
+defaults to 1 and the sample regression tests didn't exercise N>1.
+
+### At cpp v3 defaults, sub-stepping works perfectly
+
+```
+At cpp v3 defaults H30r10:
+  N  │ off lateV   off FT  │ on+NGS lateV  on+NGS FT  │ on+bias lateV  on+bias FT
+  1  │    0.25        0    │     0.30          0      │     0.17           0
+  2  │    0.32        0    │     0.32          0      │     0.16           0
+  3  │    0.33        0    │     0.31          0      │     0.16           0
+  4  │    0.34        0    │     0.34          0      │     0.07           0   ← cpp v3 default N
+  6  │    2.57        0    │     2.57          0      │     0.16           0
+  8  │   14.85        2    │    17.43          4      │     0.07           0   ← bias-only STILL stable
+```
+
+All N=1..4 paths give essentially perfect settling under cpp v3 defaults.
+At N=8 the NGS-based paths start to degrade but the bias-only path
+remains stable (lateV 0.07).
+
+### Math: why current defaults can't handle sub-stepping
+
+`PrepareConstraints(h=outerDt/N)` runs ONCE per outer step with the
+sub-step h, computing `bias = c · biasRate` where
+`biasRate = omega / (2·ratio + h·omega)`. Then the bias is applied N
+times in the velocity-solve loop.
+
+At H120, ratio=1, omega=754:
+- N=1, h=1/60:  biasRate = 754/(2 + 12.6)  =  51.6  [1/s]
+- N=4, h=1/240: biasRate = 754/(2 + 3.14)  = 146.7  [1/s]
+
+Per sub-step bias is 2.84× larger at N=4. Per-outer-step total bias
+applied = 4 · 146.7 = 586.4, vs 1 · 51.6 = 51.6 at N=1 — **11× more
+total bias correction per outer step at N=4**. The system saturates the
+ContactSpeed clamp (15 m/s) and pumps energy.
+
+At H30, ratio=10, omega=188:
+- N=1, h=1/60:  biasRate = 188/(20 + 3.14) =   8.13 [1/s]
+- N=4, h=1/240: biasRate = 188/(20 + 0.78) =   9.05 [1/s]
+
+Per-outer-step total at N=4 = 4 · 9.05 = 36.2, vs 1 · 8.13 = 8.13 at
+N=1 — 4.5× compounding, but absolute magnitude stays small enough to
+not saturate the clamp.
+
+### Conclusion: same fix as task #80
+
+There is no code bug. The "cause #3 sub-step breakage" is the *same*
+configuration mismatch task #80 already diagnosed. The coordinated flip
+of all four parameters together resolves cause #2, cause #3, AND avoids
+VaryingFriction tuning resonance (task #84):
+
+```csharp
+// Today:
+ContactHertz = 120; ContactDampingRatio = 1
+UseDeltaPositionTracking = false; UseBiasOnlyContacts = false; SubStepCount = 1
+
+// Future "Phase 2.5 enabled" flip (one coherent commit):
+ContactHertz =  30; ContactDampingRatio = 10
+UseDeltaPositionTracking = true;  UseBiasOnlyContacts = true; SubStepCount = 4
+```
+
+After the flip, sub-stepping becomes both safe AND beneficial (Pyramid
+N=4 + bias-only gives lateV=0.07 — better than any N=1 configuration).
+
+### What this means for the plan
+
+Tasks #80, #81, #84 all point to the same conclusion: **the Phase 2.5
+architecture is correct and the cpp v3 wins are real, but they require
+the cpp v3 *tuning* to materialize.** The architectural changes (delta
+positions, bias-only contacts, soft constraints) plus the original
+(H120r1) tuning interact badly — we can have one or the other, not
+both. The future commit that flips defaults must move all four
+parameters together; partial migrations break the suite.
