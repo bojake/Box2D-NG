@@ -237,17 +237,28 @@ namespace Box2DNG
             {
                 float angle = qB.Angle - qA.Angle - joint.ReferenceAngle;
                 float Cdot = wB - wA;
-                
+
                 float impulse = 0f;
                 if (MathF.Abs(joint.UpperAngle - joint.LowerAngle) < 2f * Constants.AngularSlop)
                 {
                     float C = angle - joint.LowerAngle;
-                    impulse = -joint.MotorMass * (Cdot + C); 
+                    impulse = -joint.MotorMass * (Cdot + C);
                 }
                 else if (angle <= joint.LowerAngle)
                 {
+                    // Baumgarte bias: C <= 0 here (penetrating below lower limit).
+                    // We want to drive angle UP (positive Cdot), so the bias term
+                    // must be NEGATIVE so that `impulse = -axialMass*(Cdot+bias)`
+                    // becomes POSITIVE (pushing wB up, wA down → Cdot increases).
+                    // The previous form `MathF.Max(C, 0f)` evaluated to 0 here
+                    // (since C <= 0) — a dead bias that left the limit relying
+                    // entirely on the position-correction pass. Worked at
+                    // VelocityIterations=12 (multi-iteration killed Cdot fast
+                    // enough); broke at the cpp v3 VI=1 default (Step 2 of the
+                    // 2026-05-26 refactor). Use raw C as the bias — matches
+                    // cpp box2d 2.x's b2RevoluteJoint::SolveVelocityConstraints.
                     float C = angle - joint.LowerAngle;
-                    float CdotMin = Cdot + MathF.Max(C, 0f);
+                    float CdotMin = Cdot + MathF.Min(C, 0f);
                     impulse = -joint.MotorMass * CdotMin;
                     float oldImpulse = joint.LimitImpulse;
                     joint.LimitImpulse = MathF.Max(joint.LimitImpulse + impulse, 0f);
@@ -255,8 +266,12 @@ namespace Box2DNG
                 }
                 else if (angle >= joint.UpperAngle)
                 {
+                    // Symmetric to the lower-limit case: C >= 0 here, bias must
+                    // be POSITIVE so impulse becomes negative (pushing wB down,
+                    // wA up → Cdot decreases). Same bug as the lower-limit
+                    // branch — `MathF.Min(C, 0f)` collapsed to 0 here.
                     float C = angle - joint.UpperAngle;
-                    float CdotMax = Cdot + MathF.Min(C, 0f);
+                    float CdotMax = Cdot + MathF.Max(C, 0f);
                     impulse = -joint.MotorMass * CdotMax;
                     float oldImpulse = joint.LimitImpulse;
                     joint.LimitImpulse = MathF.Min(joint.LimitImpulse + impulse, 0f);
