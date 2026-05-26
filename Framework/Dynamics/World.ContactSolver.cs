@@ -119,7 +119,8 @@ namespace Box2DNG
                         float relativeVelocity = Vec2.Dot(vB - vA, normal);
 
                         float bias = 0f;
-                        float softness = 0f;
+                        Softness softness = Softness.Zero;
+                        float legacyGamma = 0f;
                         if (_world._def.EnableContactSoftening)
                         {
                             if (separation > 0f)
@@ -128,11 +129,8 @@ namespace Box2DNG
                             }
                             else if (_world._def.UseSoftConstraints)
                             {
-                                _world.ComputeContactSoftness(kNormal, timeStep, separation, out bias, out softness);
-                                if (softness > 0f)
-                                {
-                                    normalMass = 1f / (kNormal + softness);
-                                }
+                                _world.ComputeContactSoftness(timeStep, separation, out softness, out bias);
+                                _world.ComputeContactSoftnessLegacy(kNormal, timeStep, separation, out _, out legacyGamma);
                             }
                             else
                             {
@@ -157,21 +155,21 @@ namespace Box2DNG
                             Bias = bias,
                             Softness = softness
                         };
-                    }
 
-                    SolverPoint[] solverPoints = contact.EnsureSolverPoints(constraint.PointCount);
-                    for (int p = 0; p < constraint.PointCount; ++p)
-                    {
-                        ContactConstraintPoint cp = constraint.Points[p];
+                        // Bridge to the legacy ProcessTOI SolverPoint — uses the
+                        // old gamma + (kNormal+gamma)-modified normalMass form.
+                        // Removed in Step 6 alongside ProcessTOI itself.
+                        SolverPoint[] solverPoints = contact.EnsureSolverPoints(constraint.PointCount);
+                        float legacyNormalMass = legacyGamma > 0f ? 1f / (kNormal + legacyGamma) : normalMass;
                         solverPoints[p] = new SolverPoint
                         {
-                            RA = cp.RA,
-                            RB = cp.RB,
-                            NormalMass = cp.NormalMass,
-                            TangentMass = cp.TangentMass,
+                            RA = rA,
+                            RB = rB,
+                            NormalMass = legacyNormalMass,
+                            TangentMass = tangentMass,
                             VelocityBias = 0f,
-                            Softness = cp.Softness,
-                            Bias = cp.Bias
+                            Softness = legacyGamma,
+                            Bias = bias
                         };
                     }
 
@@ -303,7 +301,8 @@ namespace Box2DNG
                             float relativeVelocity = Vec2.Dot(vB - vA, normal);
 
                             float bias = 0f;
-                            float softness = 0f;
+                            Softness softness = Softness.Zero;
+                            float legacyGamma = 0f;
                             if (_world._def.EnableContactSoftening)
                             {
                                 if (separation > 0f)
@@ -312,11 +311,8 @@ namespace Box2DNG
                                 }
                                 else if (_world._def.UseSoftConstraints)
                                 {
-                                    _world.ComputeContactSoftness(kNormal, timeStep, separation, out bias, out softness);
-                                    if (softness > 0f)
-                                    {
-                                        normalMass = 1f / (kNormal + softness);
-                                    }
+                                    _world.ComputeContactSoftness(timeStep, separation, out softness, out bias);
+                                    _world.ComputeContactSoftnessLegacy(kNormal, timeStep, separation, out _, out legacyGamma);
                                 }
                                 else
                                 {
@@ -341,21 +337,21 @@ namespace Box2DNG
                                 Bias = bias,
                                 Softness = softness
                             };
-                        }
 
-                        SolverPoint[] solverPoints = contact.EnsureSolverPoints(constraint.PointCount);
-                        for (int p = 0; p < constraint.PointCount; ++p)
-                        {
-                            ContactConstraintPoint cp = constraint.Points[p];
+                            // Bridge to the legacy ProcessTOI SolverPoint — uses
+                            // the old gamma + (kNormal+gamma)-modified normalMass
+                            // form. Removed in Step 6 alongside ProcessTOI itself.
+                            SolverPoint[] solverPoints = contact.EnsureSolverPoints(constraint.PointCount);
+                            float legacyNormalMass = legacyGamma > 0f ? 1f / (kNormal + legacyGamma) : normalMass;
                             solverPoints[p] = new SolverPoint
                             {
-                                RA = cp.RA,
-                                RB = cp.RB,
-                                NormalMass = cp.NormalMass,
-                                TangentMass = cp.TangentMass,
+                                RA = rA,
+                                RB = rB,
+                                NormalMass = legacyNormalMass,
+                                TangentMass = tangentMass,
                                 VelocityBias = 0f,
-                                Softness = cp.Softness,
-                                Bias = cp.Bias
+                                Softness = legacyGamma,
+                                Bias = bias
                             };
                         }
 
@@ -559,20 +555,20 @@ namespace Box2DNG
                         Vec2 vrB = vB + Vec2.Cross(wB, cp.RB);
                         float vn = Vec2.Dot(vrB - vrA, constraint.Normal);
 
-                        // cpp v3 parity: when `useBias=false` (Relax phase),
-                        // BOTH the bias term AND the softness coupling are
-                        // disabled — the iteration becomes a plain "drive vn
-                        // to zero" velocity solve. cpp's b2SolveContacts_Overflow
-                        // (contact_solver.c:295-323) handles this by setting
-                        // velocityBias=0, massScale=1, impulseScale=0 in the
-                        // useBias=false branch. Without this, the Relax pass
-                        // continued to apply softness scaling and left bodies
-                        // with the same residual velocity it was meant to
-                        // clear — even regressing stacks that pre-Relax were
-                        // settled (task #86).
+                        // cpp v3 form (contact_solver.c:295-323):
+                        //   impulse = -normalMass * (massScale*vn + velocityBias)
+                        //             - impulseScale * normalImpulse
+                        // useBias=true (Solve phase): massScale, impulseScale,
+                        // and velocityBias all come from the constraint softness.
+                        // useBias=false (Relax phase): massScale=1, impulseScale=0,
+                        // velocityBias=0 — a plain "drive vn to zero" solve.
+                        // normalMass is the rigid mass 1/kNormal (no softness
+                        // term mixed in — that's the legacy formulation we
+                        // replaced in Step 1 of the cpp v3 pipeline refactor).
                         float bias = useBias ? cp.Bias : 0f;
-                        float softnessCoupling = useBias ? cp.Softness * cp.NormalImpulse : 0f;
-                        float impulse = -(vn + bias + softnessCoupling) * cp.NormalMass;
+                        float massScale = useBias ? cp.Softness.MassScale : 1f;
+                        float impulseScale = useBias ? cp.Softness.ImpulseScale : 0f;
+                        float impulse = -cp.NormalMass * (massScale * vn + bias) - impulseScale * cp.NormalImpulse;
                         float newImpulse = MathF.Max(cp.NormalImpulse + impulse, 0f);
                         impulse = newImpulse - cp.NormalImpulse;
                         cp.NormalImpulse = newImpulse;
@@ -742,7 +738,7 @@ namespace Box2DNG
                 public float BaseSeparation;
                 public float RelativeVelocity;
                 public float Bias;
-                public float Softness;
+                public Softness Softness;
             }
 
             private struct ContactConstraint

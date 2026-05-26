@@ -126,7 +126,7 @@ namespace Box2DNG
                         float relativeVelocity = Vec2.Dot(vB - vA, normal);
 
                         float bias = 0f;
-                        float softness = 0f;
+                        Softness softness = Softness.Zero;
                         if (_world._def.EnableContactSoftening)
                         {
                             if (separation > 0f)
@@ -135,11 +135,7 @@ namespace Box2DNG
                             }
                             else if (_world._def.UseSoftConstraints)
                             {
-                                _world.ComputeContactSoftness(kNormal, timeStep, separation, out bias, out softness);
-                                if (softness > 0f)
-                                {
-                                    normalMass = 1f / (kNormal + softness);
-                                }
+                                _world.ComputeContactSoftness(timeStep, separation, out softness, out bias);
                             }
                             else
                             {
@@ -317,7 +313,7 @@ namespace Box2DNG
                             float relativeVelocity = Vec2.Dot(vB - vA, normal);
 
                             float bias = 0f;
-                            float softness = 0f;
+                            Softness softness = Softness.Zero;
                             if (_world._def.EnableContactSoftening)
                             {
                                 if (separation > 0f)
@@ -326,11 +322,7 @@ namespace Box2DNG
                                 }
                                 else if (_world._def.UseSoftConstraints)
                                 {
-                                    _world.ComputeContactSoftness(kNormal, timeStep, separation, out bias, out softness);
-                                    if (softness > 0f)
-                                    {
-                                        normalMass = 1f / (kNormal + softness);
-                                    }
+                                    _world.ComputeContactSoftness(timeStep, separation, out softness, out bias);
                                 }
                                 else
                                 {
@@ -633,8 +625,12 @@ namespace Box2DNG
                     Vec2 vrB = vB + Vec2.Cross(wB, cp.RB);
                     float vn = Vec2.Dot(vrB - vrA, constraint.Normal);
 
+                    // cpp v3 form (contact_solver.c:295-323). See the matching
+                    // comment in World.ContactSolver.cs SolveVelocityConstraint.
                     float bias = useBias ? cp.Bias : 0f;
-                    float impulse = -(vn + bias + cp.Softness * cp.NormalImpulse) * cp.NormalMass;
+                    float massScale = useBias ? cp.Softness.MassScale : 1f;
+                    float impulseScale = useBias ? cp.Softness.ImpulseScale : 0f;
+                    float impulse = -cp.NormalMass * (massScale * vn + bias) - impulseScale * cp.NormalImpulse;
                     float newImpulse = MathF.Max(cp.NormalImpulse + impulse, 0f);
                     impulse = newImpulse - cp.NormalImpulse;
                     cp.NormalImpulse = newImpulse;
@@ -720,7 +716,8 @@ namespace Box2DNG
                 float[] tangentMass = new float[width];
                 float[] friction = new float[width];
                 float[] bias = new float[width];
-                float[] softness = new float[width];
+                float[] massScale = new float[width];
+                float[] impulseScale = new float[width];
                 float[] tangentSpeed = new float[width];
                 float[] rollingMass = new float[width];
                 float[] rollingResistance = new float[width];
@@ -762,7 +759,8 @@ namespace Box2DNG
                     tangentMass[lane] = cp.TangentMass;
                     friction[lane] = constraint.Friction;
                     bias[lane] = useBias ? cp.Bias : 0f;
-                    softness[lane] = cp.Softness;
+                    massScale[lane] = useBias ? cp.Softness.MassScale : 1f;
+                    impulseScale[lane] = useBias ? cp.Softness.ImpulseScale : 0f;
                     tangentSpeed[lane] = constraint.TangentSpeed;
                     rollingMass[lane] = constraint.RollingMass;
                     rollingResistance[lane] = constraint.RollingResistance;
@@ -797,7 +795,8 @@ namespace Box2DNG
                 Vector<float> tangentMassV = new Vector<float>(tangentMass);
                 Vector<float> frictionV = new Vector<float>(friction);
                 Vector<float> biasV = new Vector<float>(bias);
-                Vector<float> softnessV = new Vector<float>(softness);
+                Vector<float> massScaleV = new Vector<float>(massScale);
+                Vector<float> impulseScaleV = new Vector<float>(impulseScale);
                 Vector<float> tangentSpeedV = new Vector<float>(tangentSpeed);
                 Vector<float> rollingMassV = new Vector<float>(rollingMass);
                 Vector<float> rollingResistanceV = new Vector<float>(rollingResistance);
@@ -812,7 +811,7 @@ namespace Box2DNG
                 Vector<float> dvy = (vByV + crossBy) - (vAyV + crossAy);
 
                 Vector<float> vn = dvx * normalXV + dvy * normalYV;
-                Vector<float> impulse = -(vn + biasV + softnessV * normalImpulseV) * normalMassV;
+                Vector<float> impulse = -normalMassV * (massScaleV * vn + biasV) - impulseScaleV * normalImpulseV;
                 Vector<float> newImpulse = Vector.Max(normalImpulseV + impulse, Vector<float>.Zero);
                 Vector<float> delta = newImpulse - normalImpulseV;
                 normalImpulseV = newImpulse;
@@ -922,7 +921,8 @@ namespace Box2DNG
                 float[] nMass1 = new float[width];
                 float[] tMass1 = new float[width];
                 float[] bias1 = new float[width];
-                float[] softness1 = new float[width];
+                float[] massScale1 = new float[width];
+                float[] impulseScale1 = new float[width];
 
                 float[] rA2x = new float[width];
                 float[] rA2y = new float[width];
@@ -933,7 +933,8 @@ namespace Box2DNG
                 float[] nMass2 = new float[width];
                 float[] tMass2 = new float[width];
                 float[] bias2 = new float[width];
-                float[] softness2 = new float[width];
+                float[] massScale2 = new float[width];
+                float[] impulseScale2 = new float[width];
 
                 float[] tangentSpeed = new float[width];
                 float[] rollingMass = new float[width];
@@ -975,7 +976,8 @@ namespace Box2DNG
                     nMass1[lane] = cp1.NormalMass;
                     tMass1[lane] = cp1.TangentMass;
                     bias1[lane] = useBias ? cp1.Bias : 0f;
-                    softness1[lane] = cp1.Softness;
+                    massScale1[lane] = useBias ? cp1.Softness.MassScale : 1f;
+                    impulseScale1[lane] = useBias ? cp1.Softness.ImpulseScale : 0f;
 
                     rA2x[lane] = cp2.RA.X;
                     rA2y[lane] = cp2.RA.Y;
@@ -986,7 +988,8 @@ namespace Box2DNG
                     nMass2[lane] = cp2.NormalMass;
                     tMass2[lane] = cp2.TangentMass;
                     bias2[lane] = useBias ? cp2.Bias : 0f;
-                    softness2[lane] = cp2.Softness;
+                    massScale2[lane] = useBias ? cp2.Softness.MassScale : 1f;
+                    impulseScale2[lane] = useBias ? cp2.Softness.ImpulseScale : 0f;
 
                     tangentSpeed[lane] = constraint.TangentSpeed;
                     rollingMass[lane] = constraint.RollingMass;
@@ -1019,7 +1022,8 @@ namespace Box2DNG
                 Vector<float> nMass1V = new Vector<float>(nMass1);
                 Vector<float> tMass1V = new Vector<float>(tMass1);
                 Vector<float> bias1V = new Vector<float>(bias1);
-                Vector<float> softness1V = new Vector<float>(softness1);
+                Vector<float> massScale1V = new Vector<float>(massScale1);
+                Vector<float> impulseScale1V = new Vector<float>(impulseScale1);
 
                 Vector<float> rA2xV = new Vector<float>(rA2x);
                 Vector<float> rA2yV = new Vector<float>(rA2y);
@@ -1030,7 +1034,8 @@ namespace Box2DNG
                 Vector<float> nMass2V = new Vector<float>(nMass2);
                 Vector<float> tMass2V = new Vector<float>(tMass2);
                 Vector<float> bias2V = new Vector<float>(bias2);
-                Vector<float> softness2V = new Vector<float>(softness2);
+                Vector<float> massScale2V = new Vector<float>(massScale2);
+                Vector<float> impulseScale2V = new Vector<float>(impulseScale2);
 
                 Vector<float> tangentSpeedV = new Vector<float>(tangentSpeed);
                 Vector<float> rollingMassV = new Vector<float>(rollingMass);
@@ -1044,7 +1049,7 @@ namespace Box2DNG
                 Vector<float> dvx = (vBxV + crossBx) - (vAxV + crossAx);
                 Vector<float> dvy = (vByV + crossBy) - (vAyV + crossAy);
                 Vector<float> vn = dvx * normalXV + dvy * normalYV;
-                Vector<float> impulse = -(vn + bias1V + softness1V * nImp1V) * nMass1V;
+                Vector<float> impulse = -nMass1V * (massScale1V * vn + bias1V) - impulseScale1V * nImp1V;
                 Vector<float> newImp = Vector.Max(nImp1V + impulse, Vector<float>.Zero);
                 Vector<float> delta = newImp - nImp1V;
                 nImp1V = newImp;
@@ -1065,7 +1070,7 @@ namespace Box2DNG
                 dvx = (vBxV + crossBx) - (vAxV + crossAx);
                 dvy = (vByV + crossBy) - (vAyV + crossAy);
                 vn = dvx * normalXV + dvy * normalYV;
-                impulse = -(vn + bias2V + softness2V * nImp2V) * nMass2V;
+                impulse = -nMass2V * (massScale2V * vn + bias2V) - impulseScale2V * nImp2V;
                 newImp = Vector.Max(nImp2V + impulse, Vector<float>.Zero);
                 delta = newImp - nImp2V;
                 nImp2V = newImp;
@@ -1659,7 +1664,7 @@ namespace Box2DNG
                 public float BaseSeparation;
                 public float RelativeVelocity;
                 public float Bias;
-                public float Softness;
+                public Softness Softness;
             }
 
             private struct ContactConstraint

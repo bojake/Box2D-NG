@@ -6413,7 +6413,7 @@ namespace Box2DNG
                     float separation = Vec2.Dot((centerB + rB) - (centerA + rA), normal);
                     if (_def.UseSoftConstraints)
                     {
-                        ComputeContactSoftness(kNormal, timeStep, separation, out bias, out softness);
+                        ComputeContactSoftnessLegacy(kNormal, timeStep, separation, out bias, out softness);
                         if (softness > 0f)
                         {
                             normalMass = 1f / (kNormal + softness);
@@ -6636,7 +6636,12 @@ namespace Box2DNG
             return velocity * factor;
         }
 
-        private void ComputeContactSoftness(float kNormal, float timeStep, float separation, out float bias, out float softness)
+        // Legacy soft-constraint coefficients used by the soon-to-be-removed
+        // ProcessTOI path (PrepareContact / SolveContact). Stores a single
+        // gamma = 1/(h*(d+h*k)) into SolverPoint.Softness and modifies
+        // normalMass to 1/(kNormal+gamma). Slated for removal alongside
+        // ProcessTOI in Step 6 of the cpp v3 pipeline refactor.
+        private void ComputeContactSoftnessLegacy(float kNormal, float timeStep, float separation, out float bias, out float softness)
         {
             bias = 0f;
             softness = 0f;
@@ -6670,6 +6675,31 @@ namespace Box2DNG
             bias = MathFng.Clamp(bias, -maxBias, 0f);
 
             softness = gamma;
+        }
+
+        // cpp v3 soft-constraint form (matches [solver.h:239](../box2d-cpp/src/solver.h:239)
+        // and the use in [contact_solver.c:295-323](../box2d-cpp/src/contact_solver.c:295)).
+        // Returns a Softness(BiasRate, MassScale, ImpulseScale) struct plus a
+        // precomputed velocity bias = max(massScale * biasRate * c, -contactSpeed)
+        // where c = min(separation + LinearSlop, 0). The Softness struct is
+        // mass-independent so it could be hoisted to per-constraint or per-step,
+        // but for now we compute it per-point alongside bias.
+        private void ComputeContactSoftness(float timeStep, float separation, out Softness softness, out float bias)
+        {
+            softness = Softness.Zero;
+            bias = 0f;
+
+            float hertz = _stepContactHertz > 0f ? _stepContactHertz : _def.ContactHertz;
+            if (hertz <= 0f)
+            {
+                return;
+            }
+
+            softness = Softness.Make(hertz, _def.ContactDampingRatio, timeStep);
+
+            float c = MathF.Min(separation + Constants.LinearSlop, 0f);
+            float maxBias = MathF.Max(_def.ContactSpeed, 0f);
+            bias = MathFng.Clamp(softness.MassScale * softness.BiasRate * c, -maxBias, 0f);
         }
 
         private float MixFriction(Fixture a, Fixture b)
@@ -7141,7 +7171,7 @@ namespace Box2DNG
                         float separation = Vec2.Dot((centerB + rB) - (centerA + rA), normal);
                         if (_def.UseSoftConstraints)
                         {
-                            ComputeContactSoftness(kNormal, timeStep, separation, out bias, out softness);
+                            ComputeContactSoftnessLegacy(kNormal, timeStep, separation, out bias, out softness);
                             if (softness > 0f)
                             {
                                 normalMass = 1f / (kNormal + softness);
