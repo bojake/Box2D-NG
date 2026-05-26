@@ -559,8 +559,20 @@ namespace Box2DNG
                         Vec2 vrB = vB + Vec2.Cross(wB, cp.RB);
                         float vn = Vec2.Dot(vrB - vrA, constraint.Normal);
 
+                        // cpp v3 parity: when `useBias=false` (Relax phase),
+                        // BOTH the bias term AND the softness coupling are
+                        // disabled — the iteration becomes a plain "drive vn
+                        // to zero" velocity solve. cpp's b2SolveContacts_Overflow
+                        // (contact_solver.c:295-323) handles this by setting
+                        // velocityBias=0, massScale=1, impulseScale=0 in the
+                        // useBias=false branch. Without this, the Relax pass
+                        // continued to apply softness scaling and left bodies
+                        // with the same residual velocity it was meant to
+                        // clear — even regressing stacks that pre-Relax were
+                        // settled (task #86).
                         float bias = useBias ? cp.Bias : 0f;
-                        float impulse = -(vn + bias + cp.Softness * cp.NormalImpulse) * cp.NormalMass;
+                        float softnessCoupling = useBias ? cp.Softness * cp.NormalImpulse : 0f;
+                        float impulse = -(vn + bias + softnessCoupling) * cp.NormalMass;
                         float newImpulse = MathF.Max(cp.NormalImpulse + impulse, 0f);
                         impulse = newImpulse - cp.NormalImpulse;
                         cp.NormalImpulse = newImpulse;

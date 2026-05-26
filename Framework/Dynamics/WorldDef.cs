@@ -67,6 +67,24 @@ namespace Box2DNG
         public int MaxSubSteps { get; private set; } = 16;
         public int VelocityIterations { get; private set; } = 12;
         public int PositionIterations { get; private set; } = 6;
+        // cpp box2d v3 sub-step pipeline has a `Relax` stage after
+        // `IntegratePositions`: a few extra velocity-solve iterations with
+        // `useBias = false`. This cleans residual velocity that the bias-
+        // driven solve introduces without re-applying position correction.
+        // Without it, bias-driven impulses can leave bodies with residual
+        // downward velocity that accumulates step-over-step into penetration
+        // the per-body CCD can't catch (task #86).
+        //
+        // Default 0 — preserves pre-2026-05-26 behaviour for legacy users.
+        // Users enabling `UsePerBodyCCD` should also set `RelaxIterations=1`
+        // (or use the future coordinated cpp v3 flip when ready). cpp v3's
+        // own `RELAX_ITERATIONS` is 1, but enabling it by default in our
+        // codebase regresses sample-calibrated tests (Pyramid OFF, Dominos
+        // OFF) because their friction-iteration count was tuned against the
+        // no-relax pipeline. The full cpp parity flip is the path forward,
+        // but it requires also tuning friction iteration count + joint
+        // relax to match cpp's ITERATIONS=1 / RELAX_ITERATIONS=1 structure.
+        public int RelaxIterations { get; private set; }
         // Internal sub-step count for the velocity-solve / position-integrate
         // loop. Phase 2 of TIER4_PARITY_PLAN. Each outer Step(timeStep) runs
         // the solver N times with h = timeStep/N — soft constraints (Phase 1)
@@ -116,6 +134,7 @@ namespace Box2DNG
         public WorldDef WithMaxSubSteps(int steps) { MaxSubSteps = Math.Max(1, steps); return this; }
         public WorldDef WithVelocityIterations(int iterations) { VelocityIterations = Math.Max(1, iterations); return this; }
         public WorldDef WithPositionIterations(int iterations) { PositionIterations = Math.Max(1, iterations); return this; }
+        public WorldDef WithRelaxIterations(int iterations) { RelaxIterations = Math.Max(0, iterations); return this; }
         public WorldDef WithSubStepCount(int count) { SubStepCount = Math.Max(1, count); return this; }
         public WorldDef WithJointForceThreshold(float threshold) { JointForceThreshold = Math.Max(0f, threshold); return this; }
         public WorldDef WithJointTorqueThreshold(float threshold) { JointTorqueThreshold = Math.Max(0f, threshold); return this; }

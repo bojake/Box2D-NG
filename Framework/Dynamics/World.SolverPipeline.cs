@@ -72,6 +72,19 @@ namespace Box2DNG
                     }
                     IntegratePositions(h);
                     SolvePositionConstraints(h);
+                    // cpp v3 `Relax` stage — a few extra velocity-solve passes
+                    // with `useBias = false` after IntegratePositions. The
+                    // bias-driven Solve phase introduces residual velocity
+                    // (it drives positions toward the bias target, leaving
+                    // small velocity remnants); the Relax phase cleans this
+                    // up without re-applying position correction. Without
+                    // it, bodies in stacks accumulate small downward drift
+                    // each step until they penetrate the ground enough that
+                    // per-body CCD can't catch them (task #86 diagnosis).
+                    // RelaxIterations defaults to 1 matching cpp v3 's
+                    // `RELAX_ITERATIONS`; set to 0 via `WorldDef.WithRelaxIterations(0)`
+                    // for pre-2026-05-26 behavior.
+                    SolveRelaxVelocityConstraints(h);
                 }
                 // Phase 2.5 Stage B: commit accumulated within-step delta
                 // back into the step-start arrays before SyncSweeps so the
@@ -206,6 +219,45 @@ namespace Box2DNG
                         {
                             SolveJointVelocityConstraints(joints[i], h);
                         }
+                    }
+                }
+            }
+
+            /// <summary>
+            /// cpp v3 `Relax` stage — extra velocity-solve iterations with
+            /// `useBias = false`, called after `IntegratePositions` in each
+            /// sub-step. Cleans residual velocity from the bias-driven
+            /// `SolveVelocityConstraints` without re-applying position
+            /// correction. This is the cornerstone fix for per-body CCD
+            /// viability (task #86): bias-driven impulses leave bodies with
+            /// small residual velocity that accumulates over many steps
+            /// into ground penetration; the Relax pass nulls this residual
+            /// out per sub-step so stacks stay settled even without legacy
+            /// ProcessTOI's implicit assist.
+            ///
+            /// cpp solves BOTH joints and contacts in its relax phase. We
+            /// currently only relax contacts — joint relax would require a
+            /// `useBias` parameter on all 10 joint Solve methods, which is
+            /// a follow-on refactor. Contact-only relax is the high-leverage
+            /// piece (the per-body CCD failure mode in task #86 was about
+            /// contact drift, not joint drift).
+            /// </summary>
+            private void SolveRelaxVelocityConstraints(float h)
+            {
+                int relaxIterations = _world._def.RelaxIterations;
+                if (relaxIterations <= 0)
+                {
+                    return;
+                }
+                for (int iter = 0; iter < relaxIterations; ++iter)
+                {
+                    if (_useSimd)
+                    {
+                        _world._contactSolverSimd.SolveVelocity(useBias: false);
+                    }
+                    else
+                    {
+                        _world._contactSolver.SolveVelocity(useBias: false);
                     }
                 }
             }
