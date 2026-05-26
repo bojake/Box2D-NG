@@ -65,7 +65,16 @@ namespace Box2DNG
         public bool EnableContactHertzClamp { get; private set; }
         public bool EnableContactSolverSimd { get; private set; }
         public int MaxSubSteps { get; private set; } = 16;
-        public int VelocityIterations { get; private set; } = 12;
+        // cpp box2d v3's `ITERATIONS` = 1: a single velocity-solve pass per
+        // sub-step. The historical default of 12 (Box2D 2.x lineage) carried
+        // the burden of position correction *and* friction resolution in one
+        // big iteration count; cpp's pipeline factors those out — bias drives
+        // position correction in a single pass, `RelaxIterations` handles
+        // residual velocity, and friction lives in the Relax pass. Flipped
+        // to 1 (was 12) in Step 2 of the 2026-05-26 cpp v3 pipeline refactor
+        // (HANDOFF.md). Tests that depend on the old count can opt back in
+        // via `WithVelocityIterations(12)`.
+        public int VelocityIterations { get; private set; } = 1;
         public int PositionIterations { get; private set; } = 6;
         // cpp box2d v3 sub-step pipeline has a `Relax` stage after
         // `IntegratePositions`: a few extra velocity-solve iterations with
@@ -75,16 +84,12 @@ namespace Box2DNG
         // downward velocity that accumulates step-over-step into penetration
         // the per-body CCD can't catch (task #86).
         //
-        // Default 0 — preserves pre-2026-05-26 behaviour for legacy users.
-        // Users enabling `UsePerBodyCCD` should also set `RelaxIterations=1`
-        // (or use the future coordinated cpp v3 flip when ready). cpp v3's
-        // own `RELAX_ITERATIONS` is 1, but enabling it by default in our
-        // codebase regresses sample-calibrated tests (Pyramid OFF, Dominos
-        // OFF) because their friction-iteration count was tuned against the
-        // no-relax pipeline. The full cpp parity flip is the path forward,
-        // but it requires also tuning friction iteration count + joint
-        // relax to match cpp's ITERATIONS=1 / RELAX_ITERATIONS=1 structure.
-        public int RelaxIterations { get; private set; }
+        // Flipped 1 (was 0) in Step 2 of the 2026-05-26 cpp v3 pipeline
+        // refactor (HANDOFF.md), coordinated with VelocityIterations 12→1
+        // and the friction-into-Relax move (Step 3) — friction now runs
+        // only in the useBias=false branch, so RelaxIterations must be > 0
+        // for friction to resolve at all. Matches cpp's `RELAX_ITERATIONS`.
+        public int RelaxIterations { get; private set; } = 1;
         // Internal sub-step count for the velocity-solve / position-integrate
         // loop. Phase 2 of TIER4_PARITY_PLAN. Each outer Step(timeStep) runs
         // the solver N times with h = timeStep/N — soft constraints (Phase 1)

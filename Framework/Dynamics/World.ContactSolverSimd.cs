@@ -646,38 +646,44 @@ namespace Box2DNG
                     constraint.Points[p] = cp;
                 }
 
-                for (int p = 0; p < constraint.PointCount; ++p)
+                // Friction + rolling resistance run ONLY in the Relax phase
+                // (useBias=false), matching cpp v3 (contact_solver.c:344-391).
+                // See the matching comment in World.ContactSolver.cs.
+                if (!useBias)
                 {
-                    ContactConstraintPoint cp = constraint.Points[p];
+                    for (int p = 0; p < constraint.PointCount; ++p)
+                    {
+                        ContactConstraintPoint cp = constraint.Points[p];
 
-                    Vec2 vrA = vA + Vec2.Cross(wA, cp.RA);
-                    Vec2 vrB = vB + Vec2.Cross(wB, cp.RB);
-                    float vt = Vec2.Dot(vrB - vrA, constraint.Tangent) - constraint.TangentSpeed;
+                        Vec2 vrA = vA + Vec2.Cross(wA, cp.RA);
+                        Vec2 vrB = vB + Vec2.Cross(wB, cp.RB);
+                        float vt = Vec2.Dot(vrB - vrA, constraint.Tangent) - constraint.TangentSpeed;
 
-                    float impulse = -vt * cp.TangentMass;
-                    float maxFriction = constraint.Friction * cp.NormalImpulse;
-                    float newImpulse = MathFng.Clamp(cp.TangentImpulse + impulse, -maxFriction, maxFriction);
-                    impulse = newImpulse - cp.TangentImpulse;
-                    cp.TangentImpulse = newImpulse;
+                        float impulse = -vt * cp.TangentMass;
+                        float maxFriction = constraint.Friction * cp.NormalImpulse;
+                        float newImpulse = MathFng.Clamp(cp.TangentImpulse + impulse, -maxFriction, maxFriction);
+                        impulse = newImpulse - cp.TangentImpulse;
+                        cp.TangentImpulse = newImpulse;
 
-                    Vec2 P = impulse * constraint.Tangent;
-                    vA -= mA * P;
-                    wA -= iA * Vec2.Cross(cp.RA, P);
-                    vB += mB * P;
-                    wB += iB * Vec2.Cross(cp.RB, P);
+                        Vec2 P = impulse * constraint.Tangent;
+                        vA -= mA * P;
+                        wA -= iA * Vec2.Cross(cp.RA, P);
+                        vB += mB * P;
+                        wB += iB * Vec2.Cross(cp.RB, P);
 
-                    constraint.Points[p] = cp;
-                }
+                        constraint.Points[p] = cp;
+                    }
 
-                if (constraint.RollingResistance > 0f)
-                {
-                    float deltaLambda = -constraint.RollingMass * (wB - wA);
-                    float lambda = constraint.RollingImpulse;
-                    float maxLambda = constraint.RollingResistance * totalNormalImpulse;
-                    constraint.RollingImpulse = MathFng.Clamp(lambda + deltaLambda, -maxLambda, maxLambda);
-                    deltaLambda = constraint.RollingImpulse - lambda;
-                    wA -= iA * deltaLambda;
-                    wB += iB * deltaLambda;
+                    if (constraint.RollingResistance > 0f)
+                    {
+                        float deltaLambda = -constraint.RollingMass * (wB - wA);
+                        float lambda = constraint.RollingImpulse;
+                        float maxLambda = constraint.RollingResistance * totalNormalImpulse;
+                        constraint.RollingImpulse = MathFng.Clamp(lambda + deltaLambda, -maxLambda, maxLambda);
+                        deltaLambda = constraint.RollingImpulse - lambda;
+                        wA -= iA * deltaLambda;
+                        wB += iB * deltaLambda;
+                    }
                 }
 
                 _world._bodyLinearVelocities[indexA] = vA;
@@ -825,40 +831,45 @@ namespace Box2DNG
                 vByV += invMassBV * Py;
                 wBV += invIBV * (rBxV * Py - rByV * Px);
 
-                crossAx = -wAV * rAyV;
-                crossAy = wAV * rAxV;
-                crossBx = -wBV * rByV;
-                crossBy = wBV * rBxV;
+                // Friction + rolling resistance only in Relax phase (useBias=false).
+                // See matching gate in World.ContactSolver.cs SolveVelocityConstraint.
+                if (!useBias)
+                {
+                    crossAx = -wAV * rAyV;
+                    crossAy = wAV * rAxV;
+                    crossBx = -wBV * rByV;
+                    crossBy = wBV * rBxV;
 
-                dvx = (vBxV + crossBx) - (vAxV + crossAx);
-                dvy = (vByV + crossBy) - (vAyV + crossAy);
-                Vector<float> vt = dvx * tangentXV + dvy * tangentYV - tangentSpeedV;
+                    dvx = (vBxV + crossBx) - (vAxV + crossAx);
+                    dvy = (vByV + crossBy) - (vAyV + crossAy);
+                    Vector<float> vt = dvx * tangentXV + dvy * tangentYV - tangentSpeedV;
 
-                Vector<float> tImpulse = -vt * tangentMassV;
-                Vector<float> maxFriction = frictionV * normalImpulseV;
-                Vector<float> newTangentImpulse = Vector.Min(Vector.Max(tangentImpulseV + tImpulse, -maxFriction), maxFriction);
-                Vector<float> deltaT = newTangentImpulse - tangentImpulseV;
-                tangentImpulseV = newTangentImpulse;
+                    Vector<float> tImpulse = -vt * tangentMassV;
+                    Vector<float> maxFriction = frictionV * normalImpulseV;
+                    Vector<float> newTangentImpulse = Vector.Min(Vector.Max(tangentImpulseV + tImpulse, -maxFriction), maxFriction);
+                    Vector<float> deltaT = newTangentImpulse - tangentImpulseV;
+                    tangentImpulseV = newTangentImpulse;
 
-                Px = deltaT * tangentXV;
-                Py = deltaT * tangentYV;
-                vAxV -= invMassAV * Px;
-                vAyV -= invMassAV * Py;
-                wAV -= invIAV * (rAxV * Py - rAyV * Px);
-                vBxV += invMassBV * Px;
-                vByV += invMassBV * Py;
-                wBV += invIBV * (rBxV * Py - rByV * Px);
+                    Px = deltaT * tangentXV;
+                    Py = deltaT * tangentYV;
+                    vAxV -= invMassAV * Px;
+                    vAyV -= invMassAV * Py;
+                    wAV -= invIAV * (rAxV * Py - rAyV * Px);
+                    vBxV += invMassBV * Px;
+                    vByV += invMassBV * Py;
+                    wBV += invIBV * (rBxV * Py - rByV * Px);
 
-                // Rolling resistance — uses totalNormalImpulse, which for a single-point
-                // constraint is normalImpulseV (post-update).
-                Vector<float> rollDelta = -rollingMassV * (wBV - wAV);
-                Vector<float> rollLambda = rollingImpulseV;
-                Vector<float> rollMaxLambda = rollingResistanceV * normalImpulseV;
-                Vector<float> newRollingImpulse = Vector.Min(Vector.Max(rollLambda + rollDelta, -rollMaxLambda), rollMaxLambda);
-                Vector<float> rollDeltaApplied = newRollingImpulse - rollLambda;
-                rollingImpulseV = newRollingImpulse;
-                wAV -= invIAV * rollDeltaApplied;
-                wBV += invIBV * rollDeltaApplied;
+                    // Rolling resistance — uses totalNormalImpulse, which for a single-point
+                    // constraint is normalImpulseV (post-update).
+                    Vector<float> rollDelta = -rollingMassV * (wBV - wAV);
+                    Vector<float> rollLambda = rollingImpulseV;
+                    Vector<float> rollMaxLambda = rollingResistanceV * normalImpulseV;
+                    Vector<float> newRollingImpulse = Vector.Min(Vector.Max(rollLambda + rollDelta, -rollMaxLambda), rollMaxLambda);
+                    Vector<float> rollDeltaApplied = newRollingImpulse - rollLambda;
+                    rollingImpulseV = newRollingImpulse;
+                    wAV -= invIAV * rollDeltaApplied;
+                    wBV += invIBV * rollDeltaApplied;
+                }
 
                 vAxV.CopyTo(vAx);
                 vAyV.CopyTo(vAy);
@@ -1084,59 +1095,64 @@ namespace Box2DNG
                 vByV += invMassBV * Py;
                 wBV += invIBV * (rB2xV * Py - rB2yV * Px);
 
-                crossAx = -wAV * rA1yV;
-                crossAy = wAV * rA1xV;
-                crossBx = -wBV * rB1yV;
-                crossBy = wBV * rB1xV;
-                dvx = (vBxV + crossBx) - (vAxV + crossAx);
-                dvy = (vByV + crossBy) - (vAyV + crossAy);
-                Vector<float> vt = dvx * tangentXV + dvy * tangentYV - tangentSpeedV;
-                Vector<float> tImpulse = -vt * tMass1V;
-                Vector<float> maxFriction = frictionV * nImp1V;
-                Vector<float> newT = Vector.Min(Vector.Max(tImp1V + tImpulse, -maxFriction), maxFriction);
-                Vector<float> deltaT = newT - tImp1V;
-                tImp1V = newT;
-                Px = deltaT * tangentXV;
-                Py = deltaT * tangentYV;
-                vAxV -= invMassAV * Px;
-                vAyV -= invMassAV * Py;
-                wAV -= invIAV * (rA1xV * Py - rA1yV * Px);
-                vBxV += invMassBV * Px;
-                vByV += invMassBV * Py;
-                wBV += invIBV * (rB1xV * Py - rB1yV * Px);
+                // Friction + rolling resistance only in Relax phase (useBias=false).
+                // See matching gate in World.ContactSolver.cs SolveVelocityConstraint.
+                if (!useBias)
+                {
+                    crossAx = -wAV * rA1yV;
+                    crossAy = wAV * rA1xV;
+                    crossBx = -wBV * rB1yV;
+                    crossBy = wBV * rB1xV;
+                    dvx = (vBxV + crossBx) - (vAxV + crossAx);
+                    dvy = (vByV + crossBy) - (vAyV + crossAy);
+                    Vector<float> vt = dvx * tangentXV + dvy * tangentYV - tangentSpeedV;
+                    Vector<float> tImpulse = -vt * tMass1V;
+                    Vector<float> maxFriction = frictionV * nImp1V;
+                    Vector<float> newT = Vector.Min(Vector.Max(tImp1V + tImpulse, -maxFriction), maxFriction);
+                    Vector<float> deltaT = newT - tImp1V;
+                    tImp1V = newT;
+                    Px = deltaT * tangentXV;
+                    Py = deltaT * tangentYV;
+                    vAxV -= invMassAV * Px;
+                    vAyV -= invMassAV * Py;
+                    wAV -= invIAV * (rA1xV * Py - rA1yV * Px);
+                    vBxV += invMassBV * Px;
+                    vByV += invMassBV * Py;
+                    wBV += invIBV * (rB1xV * Py - rB1yV * Px);
 
-                crossAx = -wAV * rA2yV;
-                crossAy = wAV * rA2xV;
-                crossBx = -wBV * rB2yV;
-                crossBy = wBV * rB2xV;
-                dvx = (vBxV + crossBx) - (vAxV + crossAx);
-                dvy = (vByV + crossBy) - (vAyV + crossAy);
-                vt = dvx * tangentXV + dvy * tangentYV - tangentSpeedV;
-                tImpulse = -vt * tMass2V;
-                maxFriction = frictionV * nImp2V;
-                newT = Vector.Min(Vector.Max(tImp2V + tImpulse, -maxFriction), maxFriction);
-                deltaT = newT - tImp2V;
-                tImp2V = newT;
-                Px = deltaT * tangentXV;
-                Py = deltaT * tangentYV;
-                vAxV -= invMassAV * Px;
-                vAyV -= invMassAV * Py;
-                wAV -= invIAV * (rA2xV * Py - rA2yV * Px);
-                vBxV += invMassBV * Px;
-                vByV += invMassBV * Py;
-                wBV += invIBV * (rB2xV * Py - rB2yV * Px);
+                    crossAx = -wAV * rA2yV;
+                    crossAy = wAV * rA2xV;
+                    crossBx = -wBV * rB2yV;
+                    crossBy = wBV * rB2xV;
+                    dvx = (vBxV + crossBx) - (vAxV + crossAx);
+                    dvy = (vByV + crossBy) - (vAyV + crossAy);
+                    vt = dvx * tangentXV + dvy * tangentYV - tangentSpeedV;
+                    tImpulse = -vt * tMass2V;
+                    maxFriction = frictionV * nImp2V;
+                    newT = Vector.Min(Vector.Max(tImp2V + tImpulse, -maxFriction), maxFriction);
+                    deltaT = newT - tImp2V;
+                    tImp2V = newT;
+                    Px = deltaT * tangentXV;
+                    Py = deltaT * tangentYV;
+                    vAxV -= invMassAV * Px;
+                    vAyV -= invMassAV * Py;
+                    wAV -= invIAV * (rA2xV * Py - rA2yV * Px);
+                    vBxV += invMassBV * Px;
+                    vByV += invMassBV * Py;
+                    wBV += invIBV * (rB2xV * Py - rB2yV * Px);
 
-                // Rolling resistance — for two-point constraints, totalNormalImpulse
-                // is the sum of both points' normal impulses after the normal pass.
-                Vector<float> totalNormalImpulseV = nImp1V + nImp2V;
-                Vector<float> rollDelta = -rollingMassV * (wBV - wAV);
-                Vector<float> rollLambda = rollingImpulseV;
-                Vector<float> rollMaxLambda = rollingResistanceV * totalNormalImpulseV;
-                Vector<float> newRollingImpulse = Vector.Min(Vector.Max(rollLambda + rollDelta, -rollMaxLambda), rollMaxLambda);
-                Vector<float> rollDeltaApplied = newRollingImpulse - rollLambda;
-                rollingImpulseV = newRollingImpulse;
-                wAV -= invIAV * rollDeltaApplied;
-                wBV += invIBV * rollDeltaApplied;
+                    // Rolling resistance — for two-point constraints, totalNormalImpulse
+                    // is the sum of both points' normal impulses after the normal pass.
+                    Vector<float> totalNormalImpulseV = nImp1V + nImp2V;
+                    Vector<float> rollDelta = -rollingMassV * (wBV - wAV);
+                    Vector<float> rollLambda = rollingImpulseV;
+                    Vector<float> rollMaxLambda = rollingResistanceV * totalNormalImpulseV;
+                    Vector<float> newRollingImpulse = Vector.Min(Vector.Max(rollLambda + rollDelta, -rollMaxLambda), rollMaxLambda);
+                    Vector<float> rollDeltaApplied = newRollingImpulse - rollLambda;
+                    rollingImpulseV = newRollingImpulse;
+                    wAV -= invIAV * rollDeltaApplied;
+                    wBV += invIBV * rollDeltaApplied;
+                }
 
                 vAxV.CopyTo(vAx);
                 vAyV.CopyTo(vAy);

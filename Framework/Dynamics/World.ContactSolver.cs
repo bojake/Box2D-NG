@@ -585,39 +585,48 @@ namespace Box2DNG
                         constraint.Points[p] = cp;
                     }
 
-                    // Friction
-                    for (int p = 0; p < constraint.PointCount; ++p)
+                    // Friction + rolling resistance run ONLY in the Relax phase
+                    // (useBias=false), matching cpp v3's b2SolveContacts_Overflow
+                    // (contact_solver.c:344-391). cpp's reasoning: friction
+                    // depends on the normal impulse, which the bias-driven Solve
+                    // phase is still actively pushing around; deferring friction
+                    // to Relax lets it stabilize against the post-Solve normal
+                    // impulse. Step 3 of the 2026-05-26 pipeline refactor.
+                    if (!useBias)
                     {
-                        ContactConstraintPoint cp = constraint.Points[p];
+                        for (int p = 0; p < constraint.PointCount; ++p)
+                        {
+                            ContactConstraintPoint cp = constraint.Points[p];
 
-                        Vec2 vrA = vA + Vec2.Cross(wA, cp.RA);
-                        Vec2 vrB = vB + Vec2.Cross(wB, cp.RB);
-                        float vt = Vec2.Dot(vrB - vrA, constraint.Tangent) - constraint.TangentSpeed;
+                            Vec2 vrA = vA + Vec2.Cross(wA, cp.RA);
+                            Vec2 vrB = vB + Vec2.Cross(wB, cp.RB);
+                            float vt = Vec2.Dot(vrB - vrA, constraint.Tangent) - constraint.TangentSpeed;
 
-                        float impulse = -vt * cp.TangentMass;
-                        float maxFriction = constraint.Friction * cp.NormalImpulse;
-                        float newImpulse = MathFng.Clamp(cp.TangentImpulse + impulse, -maxFriction, maxFriction);
-                        impulse = newImpulse - cp.TangentImpulse;
-                        cp.TangentImpulse = newImpulse;
+                            float impulse = -vt * cp.TangentMass;
+                            float maxFriction = constraint.Friction * cp.NormalImpulse;
+                            float newImpulse = MathFng.Clamp(cp.TangentImpulse + impulse, -maxFriction, maxFriction);
+                            impulse = newImpulse - cp.TangentImpulse;
+                            cp.TangentImpulse = newImpulse;
 
-                        Vec2 P = impulse * constraint.Tangent;
-                        vA -= mA * P;
-                        wA -= iA * Vec2.Cross(cp.RA, P);
-                        vB += mB * P;
-                        wB += iB * Vec2.Cross(cp.RB, P);
+                            Vec2 P = impulse * constraint.Tangent;
+                            vA -= mA * P;
+                            wA -= iA * Vec2.Cross(cp.RA, P);
+                            vB += mB * P;
+                            wB += iB * Vec2.Cross(cp.RB, P);
 
-                        constraint.Points[p] = cp;
-                    }
+                            constraint.Points[p] = cp;
+                        }
 
-                    if (constraint.RollingResistance > 0f)
-                    {
-                        float deltaLambda = -constraint.RollingMass * (wB - wA);
-                        float lambda = constraint.RollingImpulse;
-                        float maxLambda = constraint.RollingResistance * totalNormalImpulse;
-                        constraint.RollingImpulse = MathFng.Clamp(lambda + deltaLambda, -maxLambda, maxLambda);
-                        deltaLambda = constraint.RollingImpulse - lambda;
-                        wA -= iA * deltaLambda;
-                        wB += iB * deltaLambda;
+                        if (constraint.RollingResistance > 0f)
+                        {
+                            float deltaLambda = -constraint.RollingMass * (wB - wA);
+                            float lambda = constraint.RollingImpulse;
+                            float maxLambda = constraint.RollingResistance * totalNormalImpulse;
+                            constraint.RollingImpulse = MathFng.Clamp(lambda + deltaLambda, -maxLambda, maxLambda);
+                            deltaLambda = constraint.RollingImpulse - lambda;
+                            wA -= iA * deltaLambda;
+                            wB += iB * deltaLambda;
+                        }
                     }
 
                     _world._bodyLinearVelocities[indexA] = vA;
