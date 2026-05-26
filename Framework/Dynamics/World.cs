@@ -6983,6 +6983,18 @@ namespace Box2DNG
                         // impulse chain that drives small bodies' velocity
                         // updates to NaN within ~16 outer steps. Caught by
                         // bisecting AddPair flag-on N=1 hang.
+                        //
+                        // Task #86 note: this collapse ALSO hides the outer-
+                        // step trajectory from per-body CCD's IsFastBody
+                        // check, so per-body CCD never fires for NGS-
+                        // corrected bodies. Per-body CCD's Pyramid /
+                        // CircleStress / Cantilever fall-through regressions
+                        // are caused by this AND by the regular contact NGS
+                        // not being strong enough to prevent slow drift
+                        // without legacy ProcessTOI's implicit position
+                        // correction. Don't change this until per-body CCD
+                        // path has a proper architectural fix (multi-day
+                        // work; not landing here).
                         bodyA.Sweep = new Sweep(bodyA.LocalCenter, newCenterA, newCenterA, newAngleA, newAngleA, 0f);
                         bodyB.Sweep = new Sweep(bodyB.LocalCenter, newCenterB, newCenterB, newAngleB, newAngleB, 0f);
                     }
