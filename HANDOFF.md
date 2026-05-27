@@ -1,10 +1,11 @@
 # Handoff: cpp v3 Pipeline Refactor for Per-Body CCD
 
-**Last session ended:** 2026-05-26 (second session)
+**Last session ended:** 2026-05-26 (second session, extended)
 **Current task:** #86 — Make `UsePerBodyCCD` viable as default
-**Status:** Steps 1-3 + Revolute limit fix + Step 5 partial landed. Step 4
-(joint relax for the remaining 9 joints) and Step 6 (defaults flip + legacy
-ProcessTOI deletion) remain.
+**Status:** Steps 1-5 landed + Step 4 (joint useBias plumbing) shipped as
+opt-in. Step 6a (UsePerBodyCCD default flip) attempted and reverted —
+diagnostic shows the blocker is a per-body CCD architectural gap (rigid
+chains tear when one link gets TOI-clamped), NOT joint relax.
 
 ## What landed in the second session
 
@@ -14,6 +15,7 @@ ProcessTOI deletion) remain.
 | `2a72ffb` | 2+3 | VelocityIterations 12→1, RelaxIterations 0→1, friction-into-Relax in both contact solvers |
 | `2b01489` | — | Revolute limit Baumgarte bias direction fix (latent bug uncovered by VI=1) |
 | `45e7310` | 5 partial | Loosened 5 sample test thresholds + marked Pinball CCD test Inconclusive — all blocked on Step 6 |
+| `c5f64a8` | 4 | Joint useBias parameter on all 10 joint Solve methods, dispatched through SolverPipeline; Relax-pass joint iteration plumbed but disabled by default behind `WithJointRelax(true)` opt-in |
 
 **Suite state:** 449 passing, 1 inconclusive (Pinball CCD), 0 failing.
 
@@ -34,42 +36,83 @@ relax — the only meaningful joint here is the dominos chain, not Pyramid)
 likely won't fix it. Pyramid likely needs Step 6's contact tuning
 (30 Hz/ratio 10 + bias-only).
 
+## Step 6a probe results (the third per-body CCD flip attempt)
+
+Flipped `WorldDef.UsePerBodyCCD = true` default on top of Steps 1-4 +
+Revolute limit fix. Four regressions surfaced:
+
+| # | Test | Failure | Category |
+|---|------|---------|----------|
+| 1 | `Cantilever_FullSceneNoFallThrough` | 8 rigid-weld bodies fall through | **Architectural gap** |
+| 2 | `Flag_PartialPhase25Flip` | Flag-state assertion stale | Trivial |
+| 3 | `Pyramid_LateWindowBounded` | FT 4 → 39 | Threshold drift |
+| 4 | `Simd_PyramidStack_RestsLikeScalarPath` | maxDiv 0.056 vs 0.05 | FP-noise amplification |
+
+The `Cantilever_FullSceneNoFallThrough` failure was probed across
+(`UsePerBodyCCD` × `EnableJointRelax` × `SubStepCount`):
+
+| CCD | JointRelax | SubStep | FT |
+|-----|-----------|---------|-----|
+| F | F | 1 | 0 (baseline) |
+| **T** | F | 1 | **8** (Step 6a regression) |
+| F | T | 1 | 0 |
+| **T** | T | 1 | **8** (joint relax does NOT help) |
+| **T** | F | 4 | **10** (sub-stepping makes it worse) |
+| **T** | T | 4 | **9** |
+| F | F | 4 | 0 |
+| F | T | 4 | 0 |
+
+**Diagnosis:** per-body CCD's `b2SolveContinuous` clamps each body to its
+TOI independently, without knowing about joint constraints. When one
+link of a rigid-weld chain hits the ground and gets TOI-clamped, the
+other links continue integrating — the weld stretches beyond what the
+position-correction pass can recover. `CantileverSample` (which uses
+**soft welds** at 30 Hz / 0.5 damping) doesn't hit this because the
+soft spring absorbs the stretch via bias.
+
+This is a Phase 3 / `b2SolveContinuous` architectural gap, **not** a
+joint-pipeline issue, and the matrix above proves it: neither Step 4
+(joint relax) nor SubStepCount=4 fixes it.
+
 ## What's still left
 
-### Step 4: joint relax (partial — only Revolute limit done)
+### Step 6: defaults flip + legacy ProcessTOI deletion (blocked)
 
-The handoff's full Step 4 (useBias parameter on all 10 joints + dispatch into
-the Relax pass) was scoped down to "fix the latent Revolute limit bug that
-VI=1 exposed". The remaining 9 joints still don't have a useBias parameter,
-and `SolverPipeline.SolveRelaxVelocityConstraints` still only relaxes
-contacts, not joints. Whether that matters depends on Step 6's outcome —
-the per-body CCD diagnostic above shows joint-coupled scenes (Cantilever,
-SliderCrank) are already fixed without joint relax.
+Per-body CCD default flip is BLOCKED on resolving the rigid-weld chain
+regression above. Approaches to consider for the next session:
+
+1. **Sweep joint-coupled bodies together.** When a body in a joint
+   island gets TOI-clamped, clamp the rest of the island to the same
+   alpha. This is how cpp's `b2SolveContinuous` is supposed to behave —
+   need to audit our `SolveContinuousBody` against
+   [`solver.c:379-541`](../box2d-cpp/src/solver.c).
+2. **Soft-weld the sample tests.** Change `CantileverReproTests.BuildWeldedChain`
+   to use `.WithLinearSpring(30f, 0.5f).WithAngularSpring(30f, 0.5f)`
+   matching `CantileverSample`. Reasonable if soft welds become the
+   recommended pattern, but doesn't actually fix the per-body CCD
+   limitation for users who need rigid welds.
+3. **Port joint limits to cpp v3 softness form.** Adds a per-joint
+   `constraintSoftness` (cpp default `b2MakeSoft(60Hz, 1.0, h)`) and
+   uses `bias = constraintSoftness.biasRate * C` (small magnitude,
+   gentle) instead of our `Cdot + C` (aggressive). Step 4's joint relax
+   would then survive the bias-undoing problem — soft springs accumulate
+   into `lowerImpulse`/`upperImpulse` over many iterations rather than
+   single-shot Cdot manipulation. This is a much bigger refactor.
+
+The other Step 6 flips remain unchanged from the original handoff:
+- `WorldDef.SubStepCount`: 1 → 4
+- `WorldDef.UseBiasOnlyContacts`: false → true
+- `WorldDef.ContactHertz`: 120 → 30
+- `WorldDef.ContactDampingRatio`: 1 → 10
+(`RelaxIterations` already flipped 0→1 in Step 2; `VelocityIterations`
+already flipped 12→1 in Step 2.)
 
 ### Step 5: full re-calibration
 
 I only updated the 5 thresholds that were actively failing. A full re-record
 via BaselineRecorder (with the new pipeline) hasn't been pasted into
-BASELINE.md. Worth doing before Step 6 so the Step-6 delta is measurable.
-
-### Step 6: defaults flip + legacy ProcessTOI deletion
-
-Unchanged from the original handoff. The flips:
-- `WorldDef.UsePerBodyCCD`: false → true
-- `WorldDef.SubStepCount`: 1 → 4
-- `WorldDef.UseBiasOnlyContacts`: false → true
-- `WorldDef.ContactHertz`: 120 → 30
-- `WorldDef.ContactDampingRatio`: 1 → 10
-- (RelaxIterations already flipped 0→1 in Step 2.)
-
-Then delete ProcessTOI / IntegrateForTOI (~250 LOC), drop Cantilever's
-stiffer-than-cpp 30 Hz tune, tighten the loosened thresholds back. Close
-tasks #85, #86.
-
-A useful sanity check before flipping: run `B2_SUBSTEP=4 B2_PERBODY_CCD=1
-B2_BASELINE=1 dotnet test --filter ~BaselineRecorder` and confirm the
-combined-flip metrics are within the loosened thresholds, then tighten
-based on what `SubStep=4 + PerBodyCCD` actually produces.
+BASELINE.md. Worth doing once the Step 6 architectural blocker is
+addressed so the Step-6 delta is measurable.
 
 ---
 
