@@ -15,8 +15,8 @@ namespace Box2DNG
         // `UseBiasOnlyContacts` in a future commit, after per-sample
         // validation against Cantilever / Car / Breakable / FrictionJoint
         // (the regressions the bias-only flip exposed).
-        public float ContactHertz { get; private set; } = 120f;
-        public float ContactDampingRatio { get; private set; } = 1f;
+        public float ContactHertz { get; private set; } = 30f;
+        public float ContactDampingRatio { get; private set; } = 10f;
         public float ContactSpeed { get; private set; } = 15f;
         public float MaximumLinearSpeed { get; private set; } = 1000f;
         public float MaximumAngularSpeed { get; private set; } = 50f;
@@ -38,7 +38,7 @@ namespace Box2DNG
         // (Sweep now spans the full outer step, so legacy ProcessTOI still
         // catches tunneling under sub-stepping). Future flip needs a probe
         // pass before changing this default.
-        public bool UsePerBodyCCD { get; private set; }
+        public bool UsePerBodyCCD { get; private set; } = true;
         // Phase 2.5 Stages B–K of TIER4_PARITY_PLAN: cpp v3's delta-position
         // model where `_bodyPositions[id]` / `_bodyRotations[id]` stay at
         // the outer-step start throughout the sub-step loop and
@@ -59,7 +59,7 @@ namespace Box2DNG
         // tuning-sensitive (task #84); ContactHertz=30, ratio=10 must be
         // set together. Intermediate (Hz, ratio) tunings can produce
         // friction-bias coupling explosions (see BASELINE.md task #84).
-        public bool UseBiasOnlyContacts { get; private set; } = false;
+        public bool UseBiasOnlyContacts { get; private set; } = true;
         public bool EnableContactSoftening { get; private set; } = true;
         public bool UseSoftConstraints { get; private set; } = true;
         public bool EnableContactHertzClamp { get; private set; }
@@ -111,7 +111,7 @@ namespace Box2DNG
         // FrictionJoint / SliderCrank / Car samples that the probes missed.
         // cpp v3 default is 4 — future work needs per-sample CCD-interaction
         // validation before flipping. Opt in per-test or per-sample.
-        public int SubStepCount { get; private set; } = 1;
+        public int SubStepCount { get; private set; } = 4;
         public float JointForceThreshold { get; private set; } = float.MaxValue;
         public float JointTorqueThreshold { get; private set; } = float.MaxValue;
         // Global soft-constraint default for joints whose own Hertz is 0 (rigid).

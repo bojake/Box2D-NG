@@ -41,30 +41,28 @@ namespace Box2DNG.Tests
             //     full outer-step trajectory).
             //
             // What stays opt-in until per-sample validation lands:
-            //   - UseBiasOnlyContacts (still default false; flip explicitly
-            //     for cpp v3 settling wins; needs Cantilever/Car/FrictionJoint
-            //     follow-up first)
-            //   - SubStepCount > 1 (default 1; Pyramid wins at N=4 with the
-            //     full coordinated tuning, but real-suite testing exposed
-            //     other-sample regressions)
-            //   - UsePerBodyCCD (default false; catastrophic regressions
-            //     in CircleStress / Cantilever / FrictionJoint when paired
-            //     with the partial-flip configuration)
-            //   - ContactHertz / ContactDampingRatio at (30, 10) — moves
-            //     with bias-only
+            //
+            // Step 6 coordinated flip (2026-05-26, third attempt) flipped
+            // the remaining five together as a single block — partial
+            // flips kept tripping over chaotic-basin interactions between
+            // CCD, sub-stepping, and contact tuning. The full block now
+            // defaults: UsePerBodyCCD=true, UseBiasOnlyContacts=true,
+            // SubStepCount=4, ContactHertz=30, ContactDampingRatio=10.
+            // VelocityIterations=1 + RelaxIterations=1 already moved in
+            // Step 2 of the refactor.
             WorldDef def = new WorldDef();
             Assert.IsTrue(def.UseDeltaPositionTracking,
                 "UseDeltaPositionTracking flipped to default-on in the partial Phase 2.5 flip.");
-            Assert.IsFalse(def.UseBiasOnlyContacts,
-                "UseBiasOnlyContacts stays default-off — needs Cantilever/Car/FrictionJoint follow-up.");
-            Assert.AreEqual(1, def.SubStepCount,
-                "SubStepCount stays at 1 — per-sample sub-step validation deferred.");
-            Assert.IsFalse(def.UsePerBodyCCD,
-                "UsePerBodyCCD stays default-off — partial-flip CCD interactions need investigation.");
-            Assert.AreEqual(120f, def.ContactHertz,
-                "ContactHertz stays at legacy 120 — moves with UseBiasOnlyContacts.");
-            Assert.AreEqual(1f, def.ContactDampingRatio,
-                "ContactDampingRatio stays at legacy 1 — moves with UseBiasOnlyContacts.");
+            Assert.IsTrue(def.UseBiasOnlyContacts,
+                "UseBiasOnlyContacts flipped on in the Step 6 coordinated cpp v3 flip.");
+            Assert.AreEqual(4, def.SubStepCount,
+                "SubStepCount flipped to 4 (cpp v3) in the Step 6 coordinated flip.");
+            Assert.IsTrue(def.UsePerBodyCCD,
+                "UsePerBodyCCD flipped on in the Step 6 coordinated cpp v3 flip.");
+            Assert.AreEqual(30f, def.ContactHertz,
+                "ContactHertz flipped to 30 (cpp v3) in the Step 6 coordinated flip.");
+            Assert.AreEqual(10f, def.ContactDampingRatio,
+                "ContactDampingRatio flipped to 10 (cpp v3) in the Step 6 coordinated flip.");
         }
 
         [TestMethod]

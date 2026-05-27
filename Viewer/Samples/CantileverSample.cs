@@ -17,8 +17,14 @@ namespace Box2DNG.Viewer.Samples
             // (without Phase 2.5 deltaPosition tracking landed yet) needs
             // a stiffer spring at (30 Hz, 0.5 damping) to keep the late-
             // window peak under the threshold pinned by SampleSettlingTests.
-            // Once Phase 2.5 Stages B–K land we can revisit and drop back
-            // to cpp's exact tune.
+            //
+            // Note (Step 6 coordinated flip, 2026-05-26): tried reverting
+            // to cpp's 15 Hz tune after flipping the contact tuning to
+            // 30 Hz / ratio 10, on the theory that the stiffer 30 Hz weld
+            // would resonate with the 30 Hz contacts. That made the late-
+            // window peak worse (107 → 157), so the 30 Hz tune stays. The
+            // Cantilever_LateWindow regression under the coordinated flip
+            // is documented but not yet resolved.
             WeldJointDef ChainWeld(Body a, Body b, Vec2 anchor) =>
                 new WeldJointDef(a, b, anchor)
                     .WithLinearSpring(30f, 0.5f)
