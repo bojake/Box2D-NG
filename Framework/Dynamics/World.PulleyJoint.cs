@@ -34,8 +34,13 @@ namespace Box2DNG
             joint.Mass = invMass > 0f ? 1f / invMass : 0f;
         }
 
-        internal void SolvePulleyJointVelocityConstraints(int index)
+        // PulleyJoint is a pure Cdot-only velocity solve (no position-correction
+        // bias) — position drift is handled by SolvePulleyJointPositionConstraints.
+        // useBias is accepted for dispatch uniformity; behaviour is identical
+        // in Solve and Relax.
+        internal void SolvePulleyJointVelocityConstraints(int index, bool useBias)
         {
+            _ = useBias;
             ref PulleyJointData joint = ref _pulleyJointsData[index];
             int indexA = joint.BodyA;
             int indexB = joint.BodyB;

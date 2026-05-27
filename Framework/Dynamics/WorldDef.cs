@@ -64,6 +64,16 @@ namespace Box2DNG
         public bool UseSoftConstraints { get; private set; } = true;
         public bool EnableContactHertzClamp { get; private set; }
         public bool EnableContactSolverSimd { get; private set; }
+        // Step 4 of the 2026-05-26 cpp v3 pipeline refactor: when true, the
+        // Relax pass also iterates joints with useBias=false (matches cpp's
+        // b2_stageRelax calling b2SolveJointsTask). Disabled by default —
+        // empirically un-does the Solve pass's Baumgarte limit recovery
+        // (our `Cdot + C` form is aggressive and Relax's bias=0 form
+        // counteracts it). Enable explicitly once joint limits are ported
+        // to the cpp v3 softness form. Joint Solve methods all accept the
+        // useBias parameter today regardless of this flag (Step 4a) — the
+        // flag only controls whether Relax invokes them.
+        public bool EnableJointRelax { get; private set; }
         public int MaxSubSteps { get; private set; } = 16;
         // cpp box2d v3's `ITERATIONS` = 1: a single velocity-solve pass per
         // sub-step. The historical default of 12 (Box2D 2.x lineage) carried
@@ -136,6 +146,7 @@ namespace Box2DNG
         public WorldDef UseSoftConstraintsSolver(bool enable) { UseSoftConstraints = enable; return this; }
         public WorldDef EnableContactHertzClamping(bool enable) { EnableContactHertzClamp = enable; return this; }
         public WorldDef EnableContactSolverSimdPath(bool enable) { EnableContactSolverSimd = enable; return this; }
+        public WorldDef WithJointRelax(bool enable = true) { EnableJointRelax = enable; return this; }
         public WorldDef WithMaxSubSteps(int steps) { MaxSubSteps = Math.Max(1, steps); return this; }
         public WorldDef WithVelocityIterations(int iterations) { VelocityIterations = Math.Max(1, iterations); return this; }
         public WorldDef WithPositionIterations(int iterations) { PositionIterations = Math.Max(1, iterations); return this; }

@@ -194,7 +194,7 @@ namespace Box2DNG
             // the step-start DeltaCenter re-capture.
         }
 
-        internal void SolveRevoluteJointVelocityConstraints(int index, float dt)
+        internal void SolveRevoluteJointVelocityConstraints(int index, float dt, bool useBias)
         {
             ref RevoluteJointData joint = ref _revoluteJointsData[index];
             int indexA = joint.BodyA;
@@ -241,8 +241,10 @@ namespace Box2DNG
                 float impulse = 0f;
                 if (MathF.Abs(joint.UpperAngle - joint.LowerAngle) < 2f * Constants.AngularSlop)
                 {
+                    // Equal-limit (locked) case: same useBias gate as the
+                    // upper/lower branches — Relax uses Cdot-only.
                     float C = angle - joint.LowerAngle;
-                    impulse = -joint.MotorMass * (Cdot + C);
+                    impulse = useBias ? -joint.MotorMass * (Cdot + C) : -joint.MotorMass * Cdot;
                 }
                 else if (angle <= joint.LowerAngle)
                 {
@@ -257,8 +259,14 @@ namespace Box2DNG
                     // enough); broke at the cpp v3 VI=1 default (Step 2 of the
                     // 2026-05-26 refactor). Use raw C as the bias — matches
                     // cpp box2d 2.x's b2RevoluteJoint::SolveVelocityConstraints.
+                    //
+                    // Step 4 gating: the position-correction term is the
+                    // "bias" cpp's useBias gates (revolute_joint.c:380); in
+                    // the Relax phase the impulse becomes Cdot-only so the
+                    // post-IntegratePositions residual velocity is cleared
+                    // without re-driving toward the limit.
                     float C = angle - joint.LowerAngle;
-                    float CdotMin = Cdot + MathF.Min(C, 0f);
+                    float CdotMin = useBias ? Cdot + MathF.Min(C, 0f) : Cdot;
                     impulse = -joint.MotorMass * CdotMin;
                     float oldImpulse = joint.LimitImpulse;
                     joint.LimitImpulse = MathF.Max(joint.LimitImpulse + impulse, 0f);
@@ -271,7 +279,7 @@ namespace Box2DNG
                     // wA up → Cdot decreases). Same bug as the lower-limit
                     // branch — `MathF.Min(C, 0f)` collapsed to 0 here.
                     float C = angle - joint.UpperAngle;
-                    float CdotMax = Cdot + MathF.Max(C, 0f);
+                    float CdotMax = useBias ? Cdot + MathF.Max(C, 0f) : Cdot;
                     impulse = -joint.MotorMass * CdotMax;
                     float oldImpulse = joint.LimitImpulse;
                     joint.LimitImpulse = MathF.Min(joint.LimitImpulse + impulse, 0f);
@@ -294,7 +302,11 @@ namespace Box2DNG
                 Vec2 linearBias = Vec2.Zero;
                 float linearMassScale = 1f;
                 float linearImpulseScale = 0f;
-                if (!joint.LinearSpring.IsZero)
+                // useBias gates the soft-spring branch (matches cpp v3
+                // revolute_joint.c:446 `if (useBias)`). In the Relax phase
+                // with a rigid spring (IsZero), this collapses to the same
+                // -Solve22(K, Cdot) impulse as the Solve phase.
+                if (useBias && !joint.LinearSpring.IsZero)
                 {
                     // Phase 2.5 Stage D — effective positions for within-step bias signal.
                     Vec2 currentDelta = (EffectivePosition(indexB) + rB) - (EffectivePosition(indexA) + rA);

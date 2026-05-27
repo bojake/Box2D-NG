@@ -28,8 +28,15 @@ namespace Box2DNG
             joint.AngularImpulse = 0f;
         }
 
-        internal void SolveFrictionJointVelocityConstraints(int index, float dt)
+        // FrictionJoint is pure friction — no position-correction bias to gate.
+        // useBias parameter is accepted for dispatch uniformity (it lets the
+        // Relax pass call this method without a branch in SolverPipeline) but
+        // the solve is identical in both phases, matching cpp's friction-style
+        // accumulation that runs unconditionally each iteration.
+        internal void SolveFrictionJointVelocityConstraints(int index, float dt, bool useBias)
         {
+            _ = useBias;
+
             ref FrictionJointData joint = ref _frictionJointsData[index];
             int indexA = joint.BodyA;
             int indexB = joint.BodyB;

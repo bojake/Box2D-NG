@@ -16,7 +16,8 @@ namespace Box2DNG
 
         // Solver temp variables
         public float Impulse;
-        public float Mass;
+        public float Mass;       // Soft-effective mass: 1/(invMass + gamma) when spring active, else 1/invMass
+        public float RigidMass;  // 1/invMass — used by Relax phase (useBias=false) so the relax solve isn't softened
         public float Gamma;
         public float Bias;
         public Vec2 U;

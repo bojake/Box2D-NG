@@ -217,7 +217,7 @@ namespace Box2DNG
                         System.Collections.Generic.List<JointHandle> joints = _world._constraintGraph.Colors[colorIndex].Joints;
                         for (int i = 0; i < joints.Count; ++i)
                         {
-                            SolveJointVelocityConstraints(joints[i], h);
+                            SolveJointVelocityConstraints(joints[i], h, useBias: true);
                         }
                     }
                 }
@@ -235,12 +235,14 @@ namespace Box2DNG
             /// out per sub-step so stacks stay settled even without legacy
             /// ProcessTOI's implicit assist.
             ///
-            /// cpp solves BOTH joints and contacts in its relax phase. We
-            /// currently only relax contacts — joint relax would require a
-            /// `useBias` parameter on all 10 joint Solve methods, which is
-            /// a follow-on refactor. Contact-only relax is the high-leverage
-            /// piece (the per-body CCD failure mode in task #86 was about
-            /// contact drift, not joint drift).
+            /// Step 4 of the 2026-05-26 cpp v3 pipeline refactor extended
+            /// this to also relax joints with useBias=false — matching cpp's
+            /// b2SolveJoints_Overflow being called from the b2_stageRelax
+            /// branch (solver.c:888-898). The Step 6a probe (UsePerBodyCCD
+            /// flip alone) surfaced rigid-weld chains falling through ground
+            /// because the joints' bias-driven correction couldn't hold the
+            /// chain under VI=1 + per-body CCD's post-step pose advancement;
+            /// the Relax-phase joint solve nulls that residual.
             /// </summary>
             private void SolveRelaxVelocityConstraints(float h)
             {
@@ -258,6 +260,33 @@ namespace Box2DNG
                     else
                     {
                         _world._contactSolver.SolveVelocity(useBias: false);
+                    }
+
+                    // Joint Relax is plumbed (every joint Solve method now
+                    // accepts useBias and gates its bias term) but disabled
+                    // by default — the empirical Step 4 probe (2026-05-26)
+                    // showed that calling joints with useBias=false in Relax
+                    // actively un-does the Solve pass's limit-recovery work
+                    // for our Baumgarte-style limit bias (`Cdot + C` is
+                    // aggressive enough that Solve drives Cdot negative,
+                    // then Relax with bias=0 pushes Cdot back to zero —
+                    // killing the recovery). cpp's softness-driven limit
+                    // bias produces small Cdot perturbations that survive
+                    // Relax; our 1x Baumgarte does not.
+                    //
+                    // Enable explicitly per-world via
+                    // `WithJointRelax(true)` once joint limits are ported
+                    // to the cpp v3 softness form (Step 4c, future).
+                    if (_world._def.EnableJointRelax)
+                    {
+                        for (int colorIndex = 0; colorIndex < Constants.GraphColorCount; ++colorIndex)
+                        {
+                            System.Collections.Generic.List<JointHandle> joints = _world._constraintGraph.Colors[colorIndex].Joints;
+                            for (int i = 0; i < joints.Count; ++i)
+                            {
+                                SolveJointVelocityConstraints(joints[i], h, useBias: false);
+                            }
+                        }
                     }
                 }
             }
@@ -492,7 +521,7 @@ namespace Box2DNG
                 }
             }
 
-            private void SolveJointVelocityConstraints(JointHandle handle, float timeStep)
+            private void SolveJointVelocityConstraints(JointHandle handle, float timeStep, bool useBias)
             {
                 if (!_world.TryGetJointIndex(handle, out int index))
                 {
@@ -502,34 +531,34 @@ namespace Box2DNG
                 switch (handle.Type)
                 {
                     case JointType.Distance:
-                        _world.SolveDistanceJointVelocityConstraints(index);
+                        _world.SolveDistanceJointVelocityConstraints(index, useBias);
                         break;
                     case JointType.Revolute:
-                        _world.SolveRevoluteJointVelocityConstraints(index, timeStep);
+                        _world.SolveRevoluteJointVelocityConstraints(index, timeStep, useBias);
                         break;
                     case JointType.Prismatic:
-                        _world.SolvePrismaticJointVelocityConstraints(index, timeStep);
+                        _world.SolvePrismaticJointVelocityConstraints(index, timeStep, useBias);
                         break;
                     case JointType.Wheel:
-                        _world.SolveWheelJointVelocityConstraints(index, timeStep);
+                        _world.SolveWheelJointVelocityConstraints(index, timeStep, useBias);
                         break;
                     case JointType.Pulley:
-                        _world.SolvePulleyJointVelocityConstraints(index);
+                        _world.SolvePulleyJointVelocityConstraints(index, useBias);
                         break;
                     case JointType.Weld:
-                        _world.SolveWeldJointVelocityConstraints(index, timeStep);
+                        _world.SolveWeldJointVelocityConstraints(index, timeStep, useBias);
                         break;
                     case JointType.Motor:
-                        _world.SolveMotorJointVelocityConstraints(index, timeStep);
+                        _world.SolveMotorJointVelocityConstraints(index, timeStep, useBias);
                         break;
                     case JointType.Gear:
-                        _world.SolveGearJointVelocityConstraints(index, timeStep);
+                        _world.SolveGearJointVelocityConstraints(index, timeStep, useBias);
                         break;
                     case JointType.Rope:
-                        _world.SolveRopeJointVelocityConstraints(index, timeStep);
+                        _world.SolveRopeJointVelocityConstraints(index, timeStep, useBias);
                         break;
                     case JointType.Friction:
-                        _world.SolveFrictionJointVelocityConstraints(index, timeStep);
+                        _world.SolveFrictionJointVelocityConstraints(index, timeStep, useBias);
                         break;
                 }
             }

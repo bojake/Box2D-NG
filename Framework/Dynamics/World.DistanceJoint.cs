@@ -40,6 +40,11 @@ namespace Box2DNG
                             _bodyInverseInertias[indexB] * crB * crB;
             
             joint.Mass = invMass > 0f ? 1f / invMass : 0f;
+            // Preserve the rigid (un-softened) effective mass for the Relax
+            // pass to use — joint.Mass below gets folded with `gamma` when
+            // the spring is active, which is the wrong basis for a pure
+            // Cdot-only solve.
+            joint.RigidMass = joint.Mass;
 
             // Resolve the spring per the unified Phase 1 pattern. Per-joint
             // FrequencyHz wins; if zero, fall through to the world's JointHertz
@@ -85,7 +90,7 @@ namespace Box2DNG
             }
         }
 
-        internal void SolveDistanceJointVelocityConstraints(int index)
+        internal void SolveDistanceJointVelocityConstraints(int index, bool useBias)
         {
             ref DistanceJointData joint = ref _distanceJointsData[index];
             int indexA = joint.BodyA;
@@ -111,7 +116,19 @@ namespace Box2DNG
             Vec2 vpB = vB + Vec2.Cross(wB, rB);
 
             float Cdot = Vec2.Dot(joint.U, vpB - vpA);
-            float impulse = -joint.Mass * (Cdot + joint.Bias + joint.Gamma * joint.Impulse);
+            // Distance still uses the legacy gamma form (impulse =
+            // -mass*(Cdot+bias+gamma*acc) with mass = 1/(invMass+gamma)).
+            // Step 4 useBias gating: when useBias=false (Relax phase), drop
+            // both the bias *and* the gamma coupling — Relax should produce
+            // a pure -mass*Cdot impulse. We also fall back to the rigid
+            // mass 1/invMass for the relax solve (the gamma-modified mass
+            // is the soft-spring effective mass; in Relax we don't want
+            // that softening). Equivalent to cpp's Distance with
+            // useBias=false: massScale=1, impulseScale=0, bias=0.
+            float effectiveMass = useBias ? joint.Mass : joint.RigidMass;
+            float bias = useBias ? joint.Bias : 0f;
+            float gammaCoupling = useBias ? joint.Gamma * joint.Impulse : 0f;
+            float impulse = -effectiveMass * (Cdot + bias + gammaCoupling);
             joint.Impulse += impulse;
 
             Vec2 P = impulse * joint.U;

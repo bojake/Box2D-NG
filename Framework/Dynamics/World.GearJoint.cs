@@ -140,8 +140,13 @@ namespace Box2DNG
             joint.Mass = mass > 0f ? 1f / mass : 0f;
         }
 
-        internal void SolveGearJointVelocityConstraints(int index, float dt)
+        // GearJoint is a pure Cdot-only velocity solve (no position-correction
+        // bias) — position drift is handled by SolveGearJointPositionConstraints.
+        // useBias is accepted for dispatch uniformity; behaviour is identical
+        // in Solve and Relax.
+        internal void SolveGearJointVelocityConstraints(int index, float dt, bool useBias)
         {
+            _ = useBias;
             ref GearJointData joint = ref _gearJointsData[index];
             if (joint.Mass == 0f)
             {

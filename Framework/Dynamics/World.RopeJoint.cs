@@ -39,7 +39,7 @@ namespace Box2DNG
             joint.Mass = invMass > 0f ? 1f / invMass : 0f;
         }
 
-        internal void SolveRopeJointVelocityConstraints(int index, float dt)
+        internal void SolveRopeJointVelocityConstraints(int index, float dt, bool useBias)
         {
             ref RopeJointData joint = ref _ropeJointsData[index];
             int indexA = joint.BodyA;
@@ -56,7 +56,10 @@ namespace Box2DNG
             float C = joint.Length - joint.MaxLength;
             float Cdot = Vec2.Dot(joint.U, vpB - vpA);
 
-            if (C < 0f && dt > 0f)
+            // `C/dt` is a Baumgarte-style position-correction bias when the
+            // rope is over-extended (C < 0). Gate on useBias so the Relax
+            // pass solves Cdot-only.
+            if (useBias && C < 0f && dt > 0f)
             {
                 Cdot += C / dt;
             }

@@ -31,7 +31,7 @@ namespace Box2DNG
             joint.AngularBias = dt > 0f ? (joint.CorrectionFactor / dt) * angleError : 0f;
         }
 
-        internal void SolveMotorJointVelocityConstraints(int index, float dt)
+        internal void SolveMotorJointVelocityConstraints(int index, float dt, bool useBias)
         {
             ref MotorJointData joint = ref _motorJointsData[index];
             int indexA = joint.BodyA;
@@ -47,8 +47,15 @@ namespace Box2DNG
             ref float wA = ref _bodyAngularVelocities[indexA];
             ref float wB = ref _bodyAngularVelocities[indexB];
 
+            // LinearBias / AngularBias are position-correction terms (`C/dt`-
+            // scaled by CorrectionFactor at Init time) and so are gated on
+            // useBias — Relax solves Cdot-only without re-pulling toward the
+            // motor's target pose.
+            Vec2 linearBias = useBias ? joint.LinearBias : Vec2.Zero;
+            float angularBias = useBias ? joint.AngularBias : 0f;
+
             Vec2 Cdot = vB - vA;
-            Vec2 impulse = Solve22(joint.LinearMass, -Cdot - joint.LinearBias);
+            Vec2 impulse = Solve22(joint.LinearMass, -Cdot - linearBias);
 
             Vec2 oldImpulse = joint.LinearImpulse;
             joint.LinearImpulse += impulse;
@@ -63,7 +70,7 @@ namespace Box2DNG
             vB += mB * impulse;
 
             float CdotAngle = wB - wA;
-            float angularImpulse = -joint.AngularMass * (CdotAngle + joint.AngularBias);
+            float angularImpulse = -joint.AngularMass * (CdotAngle + angularBias);
             float oldAngular = joint.AngularImpulse;
             joint.AngularImpulse += angularImpulse;
             float maxAngularImpulse = joint.MaxTorque * dt;

@@ -58,7 +58,7 @@ namespace Box2DNG
             // the right reference for our hybrid model).
         }
 
-        internal void SolveWeldJointVelocityConstraints(int index, float dt)
+        internal void SolveWeldJointVelocityConstraints(int index, float dt, bool useBias)
         {
             ref WeldJointData joint = ref _weldJointsData[index];
             int indexA = joint.BodyA;
@@ -86,7 +86,12 @@ namespace Box2DNG
             Vec2 linearBias = Vec2.Zero;
             float linearMassScale = 1f;
             float linearImpulseScale = 0f;
-            if (!joint.LinearSpring.IsZero)
+            // useBias gates the soft-spring branch — matches cpp's
+            // b2SolveWeldJoint (weld_joint.c:293 `if (useBias || hertz>0)`).
+            // In the Relax phase (useBias=false) and with a rigid spring
+            // (IsZero), this branch is skipped and the solve produces the
+            // pure -Solve22(K, Cdot) form — exactly what cpp does.
+            if (useBias && !joint.LinearSpring.IsZero)
             {
                 // Phase 2.5 Stage C — read effective anchor positions (step-
                 // start + within-step delta) so the bias signal includes the
@@ -116,7 +121,7 @@ namespace Box2DNG
             float angularBias = 0f;
             float angularMassScale = 1f;
             float angularImpulseScale = 0f;
-            if (!joint.AngularSpring.IsZero)
+            if (useBias && !joint.AngularSpring.IsZero)
             {
                 // Phase 2.5 Stage C — effective rotations include within-step delta.
                 float angleError = (EffectiveRotation(indexB).Angle - EffectiveRotation(indexA).Angle) - joint.ReferenceAngle;

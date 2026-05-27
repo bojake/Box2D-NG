@@ -190,7 +190,7 @@ namespace Box2DNG
             }
         }
 
-        internal void SolvePrismaticJointVelocityConstraints(int index, float dt)
+        internal void SolvePrismaticJointVelocityConstraints(int index, float dt, bool useBias)
         {
             ref PrismaticJointData joint = ref _prismaticJointsData[index];
             int indexA = joint.BodyA;
@@ -290,8 +290,11 @@ namespace Box2DNG
                 float speculativeDistance = 0.25f * (joint.UpperTranslation - joint.LowerTranslation);
                 if (speculativeDistance < 0f) speculativeDistance = 0f;
                 float invDt = dt > 0f ? 1f / dt : 0f;
-                
-                // Lower limit
+
+                // Lower limit. cpp prismatic_joint.c:501 — the penetrating-
+                // limit branch gates on useBias; Relax uses bias=0,
+                // massScale=1, impulseScale=0 so the impulse is purely
+                // Cdot-driven (no re-correcting the limit position).
                 {
                     float C = translation - joint.LowerTranslation;
                     if (C < speculativeDistance)
@@ -303,7 +306,7 @@ namespace Box2DNG
                         {
                             bias = Math.Min(C, 1f) * invDt;
                         }
-                        else
+                        else if (useBias)
                         {
                             bias = joint.ConstraintSoftness.BiasRate * C;
                             massScale = joint.ConstraintSoftness.MassScale;
@@ -330,7 +333,7 @@ namespace Box2DNG
                     }
                 }
                 
-                // Upper limit
+                // Upper limit — same useBias gating as the lower limit.
                 {
                     float C = joint.UpperTranslation - translation;
                     if (C < speculativeDistance)
@@ -342,7 +345,7 @@ namespace Box2DNG
                         {
                              bias = Math.Min(C, 1f) * invDt;
                         }
-                        else
+                        else if (useBias)
                         {
                             bias = joint.ConstraintSoftness.BiasRate * C;
                             massScale = joint.ConstraintSoftness.MassScale;
@@ -370,22 +373,30 @@ namespace Box2DNG
                 }
             }
 
-            // Linear/Angular constraint (perpendicular)
+            // Linear/Angular constraint (perpendicular) — cpp's p2p +
+            // angular pair, gated on useBias (prismatic_joint.c:595).
             {
                 Vec2 Cdot1 = new Vec2(
                     Vec2.Dot(joint.Perp, vB - vA) + joint.S2 * wB - joint.S1 * wA,
                     wB - wA);
-                
-                Vec2 C1 = new Vec2(
-                    Vec2.Dot(joint.Perp, d),
-                    (qB.Angle - qA.Angle) - joint.ReferenceAngle);
-                
-                Vec2 bias = new Vec2(joint.ConstraintSoftness.BiasRate * C1.X, joint.ConstraintSoftness.BiasRate * C1.Y);
+
+                Vec2 bias = Vec2.Zero;
+                float massScale = 1f;
+                float impulseScale = 0f;
+                if (useBias)
+                {
+                    Vec2 C1 = new Vec2(
+                        Vec2.Dot(joint.Perp, d),
+                        (qB.Angle - qA.Angle) - joint.ReferenceAngle);
+                    bias = new Vec2(joint.ConstraintSoftness.BiasRate * C1.X, joint.ConstraintSoftness.BiasRate * C1.Y);
+                    massScale = joint.ConstraintSoftness.MassScale;
+                    impulseScale = joint.ConstraintSoftness.ImpulseScale;
+                }
                 Vec2 rhs = Cdot1 + bias;
                 Vec2 impulseDelta = Solve22(joint.K, rhs);
                 Vec2 df = new Vec2(
-                    -joint.ConstraintSoftness.MassScale * impulseDelta.X - joint.ConstraintSoftness.ImpulseScale * joint.Impulse.X,
-                    -joint.ConstraintSoftness.MassScale * impulseDelta.Y - joint.ConstraintSoftness.ImpulseScale * joint.Impulse.Y);
+                    -massScale * impulseDelta.X - impulseScale * joint.Impulse.X,
+                    -massScale * impulseDelta.Y - impulseScale * joint.Impulse.Y);
                 joint.Impulse += df;
                 
                 Vec2 Pperp = df.X * joint.Perp;

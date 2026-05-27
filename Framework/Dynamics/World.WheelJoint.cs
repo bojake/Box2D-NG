@@ -57,7 +57,7 @@ namespace Box2DNG
             }
         }
 
-        internal void SolveWheelJointVelocityConstraints(int index, float dt)
+        internal void SolveWheelJointVelocityConstraints(int index, float dt, bool useBias)
         {
             ref WheelJointData joint = ref _wheelJointsData[index];
             int indexA = joint.BodyA;
@@ -121,12 +121,18 @@ namespace Box2DNG
 
             if (joint.EnableLimit)
             {
+                // Baumgarte bias `MathF.Min(0f, C) * 0.2f` gated on useBias —
+                // Relax uses Cdot-only so we don't re-drive toward the limit
+                // after IntegratePositions. Matches cpp's wheel_joint.c:405
+                // `else if (useBias)` pattern.
                 float translation = Vec2.Dot(axis, d);
                 if (translation < joint.LowerTranslation)
                 {
                     float C = translation - joint.LowerTranslation;
                     float Cdot = Vec2.Dot(axis, vB + Vec2.Cross(wB, rB) - vA - Vec2.Cross(wA, rA));
-                    float impulse = -joint.SpringMass * (Cdot + MathF.Min(0f, C) * 0.2f);
+                    float impulse = useBias
+                        ? -joint.SpringMass * (Cdot + MathF.Min(0f, C) * 0.2f)
+                        : -joint.SpringMass * Cdot;
                     float prevImpulse = joint.LowerImpulse;
                     joint.LowerImpulse = MathF.Min(prevImpulse + impulse, 0f);
                     impulse = joint.LowerImpulse - prevImpulse;
@@ -148,7 +154,9 @@ namespace Box2DNG
                 {
                     float C = joint.UpperTranslation - translation;
                     float Cdot = Vec2.Dot(axis, vA + Vec2.Cross(wA, rA) - vB - Vec2.Cross(wB, rB));
-                    float impulse = -joint.SpringMass * (Cdot + MathF.Min(0f, C) * 0.2f);
+                    float impulse = useBias
+                        ? -joint.SpringMass * (Cdot + MathF.Min(0f, C) * 0.2f)
+                        : -joint.SpringMass * Cdot;
                     float prevImpulse = joint.UpperImpulse;
                     joint.UpperImpulse = MathF.Max(prevImpulse + impulse, 0f);
                     impulse = joint.UpperImpulse - prevImpulse;
