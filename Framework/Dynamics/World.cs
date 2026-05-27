@@ -6010,22 +6010,44 @@ namespace Box2DNG
         /// <summary>
         /// "Fast" criterion from cpp: body motion this step exceeds half the
         /// smallest fixture extent. Bullets bypass this check (always run CCD).
+        ///
+        /// Matches cpp's b2FinalizeBodiesTask (solver.c:591-635):
+        ///   maxVelocity = |v| + |w| * maxExtent              (m/s)
+        ///   maxDeltaPos = |dp| + |dRotation.s| * maxExtent   (m)
+        ///   maxMotion = max(maxDeltaPos, maxVelocity * dt)
+        ///   fast if maxMotion > 0.5 * minExtent
+        ///
+        /// Pre-2026-05-26 the angular-velocity terms were missing — bodies
+        /// rotating fast (e.g. a chain link being whipped by a freshly
+        /// landed triangle impact) would NOT trigger CCD even though their
+        /// far corners traverse multiple body extents in one step. This
+        /// silently let some bodies tunnel in busy scenes (the Step 6a
+        /// Cantilever-full-scene regression bisects to "tris + circles
+        /// landing on chainFree1"). Step 4 audit fix.
         /// </summary>
         private static bool IsFastBody(Body body, float timeStep)
         {
-            Vec2 translation = body.Sweep.C - body.Sweep.C0;
-            float maxDeltaPosition = translation.Length;
-            float maxVelocity = body.LinearVelocity.Length * timeStep;
-            float motion = MathF.Max(maxDeltaPosition, maxVelocity);
-
+            // Compute both min and max fixture extents in one pass — min for
+            // the threshold, max for the rotational-motion contribution.
             float minExtent = float.MaxValue;
+            float maxExtent = 0f;
             for (int i = 0; i < body.Fixtures.Count; ++i)
             {
                 Aabb a = body.Fixtures[i].Aabb;
-                float halfMin = MathF.Min(a.UpperBound.X - a.LowerBound.X, a.UpperBound.Y - a.LowerBound.Y) * 0.5f;
+                float dx = a.UpperBound.X - a.LowerBound.X;
+                float dy = a.UpperBound.Y - a.LowerBound.Y;
+                float halfMin = MathF.Min(dx, dy) * 0.5f;
+                float halfMax = MathF.Max(dx, dy) * 0.5f;
                 if (halfMin < minExtent) minExtent = halfMin;
+                if (halfMax > maxExtent) maxExtent = halfMax;
             }
             if (minExtent >= float.MaxValue) return false;
+
+            Vec2 translation = body.Sweep.C - body.Sweep.C0;
+            float deltaAngle = body.Sweep.A - body.Sweep.A0;
+            float maxDeltaPosition = translation.Length + MathF.Abs(MathF.Sin(deltaAngle)) * maxExtent;
+            float maxVelocity = (body.LinearVelocity.Length + MathF.Abs(body.AngularVelocity) * maxExtent) * timeStep;
+            float motion = MathF.Max(maxDeltaPosition, maxVelocity);
 
             const float safetyFactor = 0.5f;
             return motion > safetyFactor * minExtent;
