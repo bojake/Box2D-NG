@@ -74,24 +74,27 @@ namespace Box2DNG
             ref float wA = ref _bodyAngularVelocities[indexA];
             ref float wB = ref _bodyAngularVelocities[indexB];
 
-            // Order preserved from the legacy rigid path: linear first, then
-            // angular. cpp does angular-first; matching cpp's order changes
-            // Gauss-Seidel iteration enough to perturb the rigid-weld scenes
-            // (Cantilever body-damping workaround moves the threshold), so we
-            // stick with linear-first until Phase 1 propagates soft welds to
-            // those samples.
+            // cpp v3 prepares a step-start joint frame, then rotates it by each
+            // body's accumulated deltaRotation during every solve. Recompute
+            // the lever arms from the current effective rotations so sub-steps
+            // don't solve against stale anchor geometry.
+            Rot qA = EffectiveRotation(indexA);
+            Rot qB = EffectiveRotation(indexB);
+            Vec2 rA = Rot.Mul(qA, joint.LocalAnchorA - _bodyLocalCenters[indexA]);
+            Vec2 rB = Rot.Mul(qB, joint.LocalAnchorB - _bodyLocalCenters[indexB]);
 
             // -- Linear constraint --------------------------------------------------
-            Vec2 linearCdot = (vB + Vec2.Cross(wB, joint.RB)) - (vA + Vec2.Cross(wA, joint.RA));
+            Vec2 linearCdot = (vB + Vec2.Cross(wB, rB)) - (vA + Vec2.Cross(wA, rA));
             Vec2 linearBias = Vec2.Zero;
             float linearMassScale = 1f;
             float linearImpulseScale = 0f;
-            // useBias gates the soft-spring branch — matches cpp's
+            // useBias gates the inherited constraint-softness branch; explicit
+            // weld Hertz remains active in Relax — matches cpp's
             // b2SolveWeldJoint (weld_joint.c:293 `if (useBias || hertz>0)`).
             // In the Relax phase (useBias=false) and with a rigid spring
             // (IsZero), this branch is skipped and the solve produces the
             // pure -Solve22(K, Cdot) form — exactly what cpp does.
-            if (useBias && !joint.LinearSpring.IsZero)
+            if ((useBias || joint.LinearHertz > 0f) && !joint.LinearSpring.IsZero)
             {
                 // Phase 2.5 Stage C — read effective anchor positions (step-
                 // start + within-step delta) so the bias signal includes the
@@ -99,29 +102,35 @@ namespace Box2DNG
                 // the flag off the delta arrays stay at zero through the
                 // sub-step loop and EffectivePosition degenerates to a
                 // direct read of _bodyPositions — byte-identical.
-                Vec2 currentDelta = (EffectivePosition(indexB) + joint.RB) - (EffectivePosition(indexA) + joint.RA);
+                Vec2 currentDelta = (EffectivePosition(indexB) + rB) - (EffectivePosition(indexA) + rA);
                 Vec2 C = currentDelta - joint.DeltaCenter;
                 linearBias = joint.LinearSpring.BiasRate * C;
                 linearMassScale = joint.LinearSpring.MassScale;
                 linearImpulseScale = joint.LinearSpring.ImpulseScale;
             }
-            Vec2 b = Solve22(joint.LinearMass, linearCdot + linearBias);
+
+            float k11 = mA + mB + iA * rA.Y * rA.Y + iB * rB.Y * rB.Y;
+            float k12 = -iA * rA.X * rA.Y - iB * rB.X * rB.Y;
+            float k22 = mA + mB + iA * rA.X * rA.X + iB * rB.X * rB.X;
+            Mat22 linearMass = new Mat22(new Vec2(k11, k12), new Vec2(k12, k22));
+
+            Vec2 b = Solve22(linearMass, linearCdot + linearBias);
             Vec2 linearImpulse = new Vec2(
                 -linearMassScale * b.X - linearImpulseScale * joint.Impulse.X,
                 -linearMassScale * b.Y - linearImpulseScale * joint.Impulse.Y);
             joint.Impulse += linearImpulse;
 
             vA -= mA * linearImpulse;
-            wA -= iA * Vec2.Cross(joint.RA, linearImpulse);
+            wA -= iA * Vec2.Cross(rA, linearImpulse);
             vB += mB * linearImpulse;
-            wB += iB * Vec2.Cross(joint.RB, linearImpulse);
+            wB += iB * Vec2.Cross(rB, linearImpulse);
 
             // -- Angular constraint -------------------------------------------------
             float angularCdot = wB - wA;
             float angularBias = 0f;
             float angularMassScale = 1f;
             float angularImpulseScale = 0f;
-            if (useBias && !joint.AngularSpring.IsZero)
+            if ((useBias || joint.AngularHertz > 0f) && !joint.AngularSpring.IsZero)
             {
                 // Phase 2.5 Stage C — effective rotations include within-step delta.
                 float angleError = (EffectiveRotation(indexB).Angle - EffectiveRotation(indexA).Angle) - joint.ReferenceAngle;
